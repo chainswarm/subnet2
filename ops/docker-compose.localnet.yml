@@ -1,0 +1,16 @@
+services:
+
+  local-chain:
+    container_name: local-chain
+    image: ghcr.io/opentensor/subtensor-localnet:devnet-ready
+    command: "False"
+    ports:
+      - "9944:9944"
+      - "9945:9945"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s

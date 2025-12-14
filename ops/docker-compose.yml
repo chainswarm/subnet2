@@ -1,0 +1,204 @@
+services:
+
+  infra-subnet-postgres:
+    container_name: infra-subnet-postgres
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-validator}
+      - POSTGRES_USER=${POSTGRES_USER:-validator}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password1234}
+    ports:
+      - "5432:5432"
+    volumes:
+      - infra-subnet-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vaidator}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  infra-subnet-redis:
+    container_name: infra-subnet-redis
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - infra-subnet-redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  infra-subnet-evaluation-worker:
+    container_name: infra-subnet-evaluation-worker
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: subnet:latest
+    pull_policy: never
+    command: >
+      celery -A evaluation.tasks.celery_app worker
+      -l info
+      --concurrency=${WORKER_CONCURRENCY:-2}
+    environment:
+      - POSTGRES_HOST=infra-subnet-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-validator}
+      - POSTGRES_USER=${POSTGRES_USER:-validator}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password1234}
+      - REDIS_URL=redis://infra-subnet-redis:6379/0
+      - REPOS_PATH=/data/repos
+      - DATA_PATH=/data/datasets
+      - BENCHMARK_MAX_EXECUTION_TIME=${BENCHMARK_MAX_EXECUTION_TIME:-3600}
+      - BENCHMARK_MEMORY_LIMIT=${BENCHMARK_MEMORY_LIMIT:-16g}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - infra-subnet-repos:/data/repos
+      - infra-subnet-datasets:/data/datasets
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    depends_on:
+      infra-subnet-postgres:
+        condition: service_healthy
+      infra-subnet-redis:
+        condition: service_healthy
+
+  infra-subnet-evaluation-beat:
+    container_name: infra-subnet-evaluation-beat
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: subnet:latest
+    pull_policy: never
+    command: >
+      celery -A evaluation.tasks.celery_app beat
+      -l info
+    environment:
+      - POSTGRES_HOST=infra-subnet-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-validator}
+      - POSTGRES_USER=${POSTGRES_USER:-validator}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password1234}
+      - REDIS_URL=redis://infra-subnet-redis:6379/0
+      - CELERY_BEAT_SCHEDULE_PATH=/app/evaluation/tasks/beat_schedule.json
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./beat_schedule.json:/app/beat_schedule.json:ro
+    restart: unless-stopped
+    depends_on:
+      infra-subnet-postgres:
+        condition: service_healthy
+      infra-subnet-redis:
+        condition: service_healthy
+
+  migrations:
+    container_name: subnet-migrations
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: subnet:latest
+    pull_policy: never
+    command: alembic upgrade head
+    environment:
+      - POSTGRES_HOST=infra-subnet-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-validator}
+      - POSTGRES_USER=${POSTGRES_USER:-validator}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password1234}
+    depends_on:
+      infra-subnet-postgres:
+        condition: service_healthy
+    restart: "no"
+
+  infra-subnet-evaluation-api:
+    container_name: infra-subnet-evaluation-api
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: subnet:latest
+    pull_policy: never
+    command: >
+      uvicorn evaluation.api.main:app
+      --host 0.0.0.0
+      --port 8001
+    environment:
+      - POSTGRES_HOST=infra-subnet-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-validator}
+      - POSTGRES_USER=${POSTGRES_USER:-validator}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password1234}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+    depends_on:
+      infra-subnet-postgres:
+        condition: service_healthy
+
+  infra-subnet-validator:
+    container_name: infra-subnet-validator
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: subnet:latest
+    pull_policy: never
+    command: >
+      python neurons/validator.py
+      --netuid ${NETUID:-1}
+      --wallet.name ${WALLET_NAME:-validator}
+      --wallet.hotkey ${WALLET_HOTKEY:-default}
+      --subtensor.network ${SUBTENSOR_NETWORK:-finney}
+    environment:
+      - POSTGRES_HOST=infra-subnet-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-validator}
+      - POSTGRES_USER=${POSTGRES_USER:-validator}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password1234}
+      - REDIS_URL=redis://infra-subnet-redis:6379/0
+      - REPOS_PATH=/data/repos
+      - DATA_PATH=/data/datasets
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - infra-subnet-repos:/data/repos
+      - infra-subnet-datasets:/data/datasets
+      - ${WALLET_PATH:-~/.bittensor/wallets}:/root/.bittensor/wallets:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    depends_on:
+      infra-subnet-postgres:
+        condition: service_healthy
+      infra-subnet-redis:
+        condition: service_healthy
+
+  infra-subnet-flower:
+    container_name: infra-subnet-flower
+    image: mher/flower:2.0
+    command: >
+      celery
+      --broker=redis://infra-subnet-redis:6379/0
+      flower
+      --port=5555
+      --broker_api=redis://infra-subnet-redis:6379/0
+    environment:
+      - CELERY_BROKER_URL=redis://infra-subnet-redis:6379/0
+      - FLOWER_PORT=5555
+      - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
+    ports:
+      - "5555:5555"
+    restart: unless-stopped
+    depends_on:
+      infra-subnet-redis:
+        condition: service_healthy
+
+volumes:
+  infra-subnet-postgres-data:
+    name: infra-subnet-postgres-data
+  infra-subnet-redis-data:
+    name: infra-subnet-redis-data
+  infra-subnet-repos:
+    name: infra-subnet-repos
+  infra-subnet-datasets:
+    name: infra-subnet-datasets

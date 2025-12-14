@@ -1,0 +1,17 @@
+{
+    "epoch-start-daily": {
+        "task": "evaluation.epoch_start",
+        "schedule": "0 0 * * *",
+        "args": [1, "daily-tournament"]
+    },
+    "evaluation-hourly": {
+        "task": "evaluation.run_all_submissions",
+        "schedule": "0 * * * *",
+        "args": []
+    },
+    "epoch-end-daily": {
+        "task": "evaluation.epoch_end",
+        "schedule": "0 23 * * *",
+        "args": []
+    }
+}

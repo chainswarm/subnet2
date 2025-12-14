@@ -23,6 +23,7 @@ import bittensor as bt
 
 # Bittensor Miner Template:
 import template
+from template.protocol import SubmissionSynapse
 
 # import base miner class which takes care of most of the boilerplate
 from template.base.miner import BaseMinerNeuron
@@ -40,7 +41,24 @@ class Miner(BaseMinerNeuron):
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
 
-        # TODO(developer): Anything specific to your use case you can do here
+        # Attach submission synapse handler for evaluation tournaments
+        bt.logging.info("Attaching submission forward function to miner axon.")
+        self.axon.attach(
+            forward_fn=self.forward_submission,
+            blacklist_fn=self.blacklist_submission,
+            priority_fn=self.priority_submission,
+        )
+
+        # Log submission configuration
+        repo_url = getattr(self.config.submission, 'repository_url', None)
+        commit_hash = getattr(self.config.submission, 'commit_hash', None)
+        if repo_url and commit_hash:
+            bt.logging.info(f"Submission config: repo={repo_url}, commit={commit_hash}")
+        else:
+            bt.logging.warning(
+                "Submission not configured. Set --submission.repository_url and --submission.commit_hash "
+                "to participate in evaluation tournaments."
+            )
 
     async def forward(
         self, synapse: template.protocol.Dummy
@@ -163,6 +181,107 @@ class Miner(BaseMinerNeuron):
             f"Prioritizing {synapse.dendrite.hotkey} with value: {priority}"
         )
         return priority
+
+    # =========================================================================
+    # Submission Synapse Handlers for Evaluation Tournaments
+    # =========================================================================
+
+    async def forward_submission(
+        self, synapse: SubmissionSynapse
+    ) -> SubmissionSynapse:
+        """
+        Handles incoming SubmissionSynapse requests from validators during evaluation tournaments.
+        
+        When a validator sends a SubmissionSynapse, this miner responds with its configured
+        repository URL and commit hash. Validators use this information to clone the miner's
+        analyzer code and run it in a secure container for evaluation.
+
+        Args:
+            synapse (SubmissionSynapse): The synapse containing tournament_id and epoch_number.
+
+        Returns:
+            SubmissionSynapse: The synapse with repository_url and commit_hash filled in.
+        """
+        # Get submission configuration
+        repo_url = getattr(self.config.submission, 'repository_url', None)
+        commit_hash = getattr(self.config.submission, 'commit_hash', None)
+
+        if repo_url and commit_hash:
+            synapse.repository_url = repo_url
+            synapse.commit_hash = commit_hash
+            bt.logging.info(
+                f"Responding to submission request: tournament={synapse.tournament_id}, "
+                f"epoch={synapse.epoch_number}, repo={repo_url}, commit={commit_hash}"
+            )
+        else:
+            bt.logging.warning(
+                f"Received submission request but no repository configured. "
+                f"Set --submission.repository_url and --submission.commit_hash to participate."
+            )
+
+        return synapse
+
+    async def blacklist_submission(
+        self, synapse: SubmissionSynapse
+    ) -> typing.Tuple[bool, str]:
+        """
+        Blacklist logic for SubmissionSynapse requests.
+        
+        Only validators should be allowed to request submissions. We enforce this
+        by checking the validator_permit in the metagraph.
+
+        Args:
+            synapse (SubmissionSynapse): The synapse object from the incoming request.
+
+        Returns:
+            Tuple[bool, str]: (should_blacklist, reason)
+        """
+        if synapse.dendrite is None or synapse.dendrite.hotkey is None:
+            bt.logging.warning("Submission request missing dendrite or hotkey.")
+            return True, "Missing dendrite or hotkey"
+
+        # Check if hotkey is registered
+        if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
+            bt.logging.trace(f"Blacklisting unregistered hotkey for submission: {synapse.dendrite.hotkey}")
+            return True, "Unrecognized hotkey"
+
+        # Get UID for the requesting hotkey
+        uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
+
+        # Only allow validators to request submissions
+        if not self.metagraph.validator_permit[uid]:
+            bt.logging.warning(
+                f"Blacklisting submission request from non-validator: {synapse.dendrite.hotkey}"
+            )
+            return True, "Only validators can request submissions"
+
+        bt.logging.trace(f"Allowing submission request from validator: {synapse.dendrite.hotkey}")
+        return False, "Validator recognized"
+
+    async def priority_submission(self, synapse: SubmissionSynapse) -> float:
+        """
+        Priority logic for SubmissionSynapse requests.
+        
+        Validators with more stake get higher priority.
+
+        Args:
+            synapse (SubmissionSynapse): The synapse object from the incoming request.
+
+        Returns:
+            float: Priority score based on the validator's stake.
+        """
+        if synapse.dendrite is None or synapse.dendrite.hotkey is None:
+            return 0.0
+
+        try:
+            caller_uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
+            priority = float(self.metagraph.S[caller_uid])
+            bt.logging.trace(
+                f"Submission priority for {synapse.dendrite.hotkey}: {priority}"
+            )
+            return priority
+        except ValueError:
+            return 0.0
 
 
 # This is the main function, which runs the miner.

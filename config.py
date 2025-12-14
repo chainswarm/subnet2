@@ -1,0 +1,38 @@
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "subnet2"
+    postgres_user: str = "subnet2"
+    postgres_password: str
+
+    redis_url: str = "redis://localhost:6379/0"
+
+    repos_path: str = "/tmp/evaluation/repos"
+    data_path: str = "/tmp/evaluation/data"
+
+    benchmark_max_execution_time: int = 3600
+    benchmark_memory_limit: str = "32g"
+
+    evaluation_build_timeout_seconds: int = 600
+    evaluation_run_timeout_seconds: int = 300
+    evaluation_memory_limit_mb: int = 8192
+    evaluation_cpu_limit: float = 2.0
+
+    wallet_name: str = "default"
+    wallet_hotkey: str = "default"
+    subtensor_network: str = "finney"
+    submission_timeout_seconds: int = 30
+
+    class Config:
+        env_prefix = ""
+        env_file = ".env"
+        extra = "ignore"
+
+    def get_database_url(self) -> str:
+        return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+
+
+config = Settings()

@@ -74,3 +74,17 @@ class Dummy(bt.Synapse):
         5
         """
         return self.dummy_output
+
+
+class SubmissionSynapse(bt.Synapse):
+    tournament_id: str
+    epoch_number: int
+
+    repository_url: typing.Optional[str] = None
+    commit_hash: typing.Optional[str] = None
+
+    def deserialize(self) -> dict:
+        return {
+            "repository_url": self.repository_url,
+            "commit_hash": self.commit_hash,
+        }

@@ -155,6 +155,21 @@ def add_miner_args(cls, parser):
         default=False,
     )
 
+    # Submission config for evaluation tournaments
+    parser.add_argument(
+        "--submission.repository_url",
+        type=str,
+        help="URL to your analyzer repository (e.g., https://github.com/user/analyzer.git)",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--submission.commit_hash",
+        type=str,
+        help="Git commit hash to submit. If not set, the miner will not respond to submission requests.",
+        default=None,
+    )
+
     parser.add_argument(
         "--wandb.project_name",
         type=str,
@@ -252,9 +267,9 @@ def config(cls):
     Returns the configuration object specific to this miner or validator after adding relevant arguments.
     """
     parser = argparse.ArgumentParser()
-    bt.wallet.add_args(parser)
-    bt.subtensor.add_args(parser)
+    bt.Wallet.add_args(parser)
+    bt.Subtensor.add_args(parser)
     bt.logging.add_args(parser)
-    bt.axon.add_args(parser)
+    bt.Axon.add_args(parser)
     cls.add_args(parser)
-    return bt.config(parser)
+    return bt.Config(parser)
