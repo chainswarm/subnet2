@@ -1,5 +1,28 @@
 services:
 
+  # Local subtensor for development (use --profile localnet to enable)
+  local-subtensor:
+    container_name: local-subtensor
+    image: ghcr.io/opentensor/subtensor-localnet:devnet-ready
+    profiles:
+      - localnet
+    command: "False"
+    ports:
+      - "9994:9944"
+      - "9995:9945"
+    volumes:
+      - subtensor-data:/data
+      - subtensor-keystore:/keystore
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - subnet
+
   infra-subnet-postgres:
     container_name: infra-subnet-postgres
     image: postgres:16-alpine
@@ -147,7 +170,7 @@ services:
     pull_policy: never
     command: >
       python neurons/validator.py
-      --netuid ${NETUID:-1}
+      --netuid ${NETUID:-2}
       --wallet.name ${WALLET_NAME:-validator}
       --wallet.hotkey ${WALLET_HOTKEY:-default}
       --subtensor.network ${SUBTENSOR_NETWORK:-finney}
@@ -164,9 +187,12 @@ services:
     volumes:
       - infra-subnet-repos:/data/repos
       - infra-subnet-datasets:/data/datasets
-      - ${WALLET_PATH:-~/.bittensor/wallets}:/root/.bittensor/wallets:ro
+      - ${BITTENSOR_VOLUME_PATH:-~/.bittensor}:/root/.bittensor
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
+    networks:
+      - default
+      - subnet
     depends_on:
       infra-subnet-postgres:
         condition: service_healthy
@@ -193,7 +219,16 @@ services:
       infra-subnet-redis:
         condition: service_healthy
 
+networks:
+  subnet:
+    name: subnet
+    driver: bridge
+
 volumes:
+  subtensor-data:
+    name: subtensor-data
+  subtensor-keystore:
+    name: subtensor-keystore
   infra-subnet-postgres-data:
     name: infra-subnet-postgres-data
   infra-subnet-redis-data:

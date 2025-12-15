@@ -1,12 +1,15 @@
 services:
 
-  local-chain:
-    container_name: local-chain
+  local-subtensor:
+    container_name: local-subtensor
     image: ghcr.io/opentensor/subtensor-localnet:devnet-ready
     command: "False"
     ports:
-      - "9944:9944"
-      - "9945:9945"
+      - "9994:9944"
+      - "9995:9945"
+    volumes:
+      - subtensor-data:/data
+      - subtensor-keystore:/keystore
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
@@ -14,3 +17,16 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+    networks:
+      - subnet
+
+networks:
+  subnet:
+    name: subnet
+    driver: bridge
+
+volumes:
+  subtensor-data:
+    name: subtensor-data
+  subtensor-keystore:
+    name: subtensor-keystore
