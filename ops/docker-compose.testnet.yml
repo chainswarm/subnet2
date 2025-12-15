@@ -1,0 +1,231 @@
+# =============================================================================
+# Docker Compose Configuration for TESTNET Deployment
+# =============================================================================
+# This file extends the base docker-compose.yml with testnet-specific settings.
+#
+# USAGE:
+#   docker compose -f docker-compose.yml -f docker-compose.testnet.yml up -d
+#
+# NETWORK: test (Bittensor testnet)
+# TOURNAMENT TIMING: 12-hour cycles (production-like but accelerated)
+#   - Submission phase: 1 hour
+#   - Epoch count: 3 epochs  
+#   - Epoch duration: 3 hours per epoch
+#   - Total tournament time: 1h + (3 × 3h) = 10 hours
+#   - Schedule: Daily automated tournaments
+#
+# PURPOSE:
+#   Production-like environment for testing with shorter tournament cycles.
+#   Suitable for validating tournament logic, submission handling, and
+#   evaluation workflows before mainnet deployment.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database - Testnet Configuration
+  # ---------------------------------------------------------------------------
+  infra-subnet-postgres:
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
+      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  # ---------------------------------------------------------------------------
+  # Redis Cache - Testnet Configuration
+  # ---------------------------------------------------------------------------
+  infra-subnet-redis:
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # Celery Worker - Testnet Configuration
+  # ---------------------------------------------------------------------------
+  # Processes evaluation tasks with testnet timing parameters
+  infra-subnet-evaluation-worker:
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
+      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
+      # Testnet Tournament Timing (12-hour cycle)
+      - TOURNAMENT_SCHEDULE_MODE=daily
+      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=3600       # 1 hour
+      - TOURNAMENT_EPOCH_COUNT=3
+      - TOURNAMENT_EPOCH_DURATION_SECONDS=10800           # 3 hours
+      - TOURNAMENT_NETWORKS=torus,bittensor
+      # Evaluation Resource Limits (moderate for testing)
+      - BENCHMARK_MAX_EXECUTION_TIME=${BENCHMARK_MAX_EXECUTION_TIME:-3600}
+      - BENCHMARK_MEMORY_LIMIT=${BENCHMARK_MEMORY_LIMIT:-8g}
+      - BENCHMARK_CPU_LIMIT=${BENCHMARK_CPU_LIMIT:-2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 12G
+        reservations:
+          cpus: '2'
+          memory: 8G
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # Celery Beat Scheduler - Testnet Configuration
+  # ---------------------------------------------------------------------------
+  # Manages automated daily tournament scheduling for testnet
+  infra-subnet-evaluation-beat:
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
+      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
+      # Testnet Tournament Timing (12-hour cycle)
+      - TOURNAMENT_SCHEDULE_MODE=daily
+      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=3600       # 1 hour
+      - TOURNAMENT_EPOCH_COUNT=3
+      - TOURNAMENT_EPOCH_DURATION_SECONDS=10800           # 3 hours
+      - TOURNAMENT_NETWORKS=torus,bittensor
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # Database Migrations - Testnet Configuration
+  # ---------------------------------------------------------------------------
+  migrations:
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
+      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
+
+  # ---------------------------------------------------------------------------
+  # Evaluation API - Testnet Configuration
+  # ---------------------------------------------------------------------------
+  infra-subnet-evaluation-api:
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
+      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # Validator Node - Testnet Configuration
+  # ---------------------------------------------------------------------------
+  # Connects to Bittensor testnet and manages tournament submissions
+  infra-subnet-validator:
+    command: >
+      python neurons/validator.py
+      --netuid ${NETUID:-2}
+      --wallet.name ${WALLET_NAME:-validator_testnet}
+      --wallet.hotkey ${WALLET_HOTKEY:-default}
+      --subtensor.network test
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
+      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
+      # Testnet Tournament Timing (12-hour cycle)
+      - TOURNAMENT_SCHEDULE_MODE=daily
+      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=3600       # 1 hour
+      - TOURNAMENT_EPOCH_COUNT=3
+      - TOURNAMENT_EPOCH_DURATION_SECONDS=10800           # 3 hours
+      - TOURNAMENT_NETWORKS=torus,bittensor
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # Flower Monitoring - Testnet Configuration
+  # ---------------------------------------------------------------------------
+  infra-subnet-flower:
+    environment:
+      - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-testnet_flower_password}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    restart: always
+
+# =============================================================================
+# DEPLOYMENT INSTRUCTIONS
+# =============================================================================
+# 
+# 1. Setup environment variables:
+#    cp ops/.env.example ops/.env.testnet
+#    # Edit .env.testnet with testnet-specific values
+#
+# 2. Build the subnet image:
+#    docker compose -f ops/docker-compose.yml build
+#
+# 3. Start testnet infrastructure:
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml up -d
+#
+# 4. Run database migrations:
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml run migrations
+#
+# 5. Monitor services:
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml logs -f
+#
+# 6. Access monitoring interfaces:
+#    - Evaluation API: http://localhost:8001
+#    - Flower (Celery): http://localhost:5555
+#
+# 7. Stop services:
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml down
+#
+# =============================================================================
+# TESTNET TOURNAMENT SCHEDULE
+# =============================================================================
+#
+# With daily automated tournaments (TOURNAMENT_SCHEDULE_MODE=daily):
+# - New tournament starts every 24 hours
+# - Each tournament runs for ~10 hours (1h submission + 9h evaluation)
+# - Provides 14 hours of idle time between tournaments
+# - Allows multiple tournament iterations per day for testing
+#
+# Timeline for a single tournament:
+#   Hour 0:     Tournament starts, submission phase begins
+#   Hour 1:     Submissions close, epoch 1 begins
+#   Hour 4:     Epoch 1 ends, epoch 2 begins
+#   Hour 7:     Epoch 2 ends, epoch 3 begins
+#   Hour 10:    Epoch 3 ends, tournament completes
+#
+# =============================================================================
