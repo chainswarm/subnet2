@@ -1,3 +1,4 @@
+from typing import List
 from pydantic_settings import BaseSettings
 
 
@@ -26,6 +27,13 @@ class Settings(BaseSettings):
     subtensor_network: str = "finney"
     submission_timeout_seconds: int = 30
 
+    # Tournament Timing Configuration
+    tournament_submission_duration_seconds: int = 120
+    tournament_epoch_count: int = 3
+    tournament_epoch_duration_seconds: int = 180
+    tournament_networks: str = "torus"
+    tournament_schedule_mode: str = "manual"  # "manual" or "daily"
+
     class Config:
         env_prefix = ""
         env_file = ".env"
@@ -33,6 +41,11 @@ class Settings(BaseSettings):
 
     def get_database_url(self) -> str:
         return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+
+    @property
+    def tournament_networks_list(self) -> List[str]:
+        """Parse comma-separated networks into list"""
+        return [n.strip() for n in self.tournament_networks.split(",")]
 
 
 config = Settings()

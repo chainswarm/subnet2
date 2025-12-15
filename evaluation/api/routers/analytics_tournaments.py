@@ -35,6 +35,64 @@ from evaluation.models.database import (
 router = APIRouter(prefix="/api/v1/analytics", tags=["Tournaments"])
 
 
+@router.post(
+    "/tournaments/start",
+    summary="Start New Tournament",
+    description="""
+Start a new tournament manually with current configuration.
+
+**Note:** In production with `TOURNAMENT_SCHEDULE_MODE=daily`,
+tournaments auto-start at 00:00 UTC via Celery Beat.
+
+This endpoint is primarily for development with `TOURNAMENT_SCHEDULE_MODE=manual`.
+    """,
+    response_model=dict,
+)
+async def start_tournament(
+    epoch_number: int = Query(..., description="Epoch number for this tournament", ge=1),
+    db: Session = Depends(get_db),
+):
+    """Manually trigger a new tournament"""
+    from evaluation.tasks.epoch_start_task import epoch_start_task
+    
+    # Check for active tournament
+    active = db.query(AnalyticsTournament).filter(
+        AnalyticsTournament.status.in_([
+            "pending",
+            "collecting",
+            "testing",
+            "evaluating"
+        ])
+    ).first()
+    
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Active tournament exists: epoch {active.epoch_number}, status={active.status}"
+        )
+    
+    # Check if epoch already exists
+    existing = db.query(AnalyticsTournament).filter(
+        AnalyticsTournament.epoch_number == epoch_number
+    ).first()
+    
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tournament for epoch {epoch_number} already exists"
+        )
+    
+    # Trigger task
+    task = epoch_start_task.delay(epoch_number)
+    
+    return {
+        "task_id": task.id,
+        "epoch_number": epoch_number,
+        "message": "Tournament starting",
+        "status": "queued"
+    }
+
+
 @router.get(
     "/tournaments",
     response_model=list[TournamentResponse],
@@ -180,6 +238,7 @@ async def get_tournament(
             hotkey=s.hotkey,
             uid=s.uid,
             docker_image_digest=s.docker_image_digest,
+            repository_url=s.repository_url,
             status=s.status,
             validation_error=s.validation_error,
             submitted_at=s.submitted_at,
@@ -398,6 +457,7 @@ async def get_tournament_submissions(
             hotkey=s.hotkey,
             uid=s.uid,
             docker_image_digest=s.docker_image_digest,
+            repository_url=s.repository_url,
             status=s.status,
             validation_error=s.validation_error,
             submitted_at=s.submitted_at,

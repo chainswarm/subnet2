@@ -46,15 +46,15 @@ def collect_submissions_from_miners(
 
 
 @celery_app.task(name="evaluation.epoch_start")
-def epoch_start_task(epoch_number: int) -> str:
+def epoch_start_task(epoch_number: int = None) -> str:
     """
     Start a new analytics tournament epoch.
     
     Creates tournament record, collects submissions from miners via SubmissionSynapse,
-    and prepares for evaluation.
+    and schedules the orchestrator task.
     
     Args:
-        epoch_number: The epoch number for this tournament
+        epoch_number: Optional. If None, auto-increment from last tournament.
         
     Returns:
         Tournament ID as string
@@ -63,6 +63,17 @@ def epoch_start_task(epoch_number: int) -> str:
     repo = TournamentRepository(session)
 
     try:
+        # Check if we should run based on schedule mode
+        if config.tournament_schedule_mode == "manual":
+            if epoch_number is None:
+                logger.warning("manual_mode_requires_epoch_number")
+                return None
+        
+        # Auto-increment epoch if not provided
+        if epoch_number is None:
+            last_tournament = repo.get_latest_tournament()
+            epoch_number = (last_tournament.epoch_number + 1) if last_tournament else 1
+        
         # Check if epoch already exists
         existing = repo.get_by_epoch(epoch_number)
         if existing:
@@ -75,7 +86,7 @@ def epoch_start_task(epoch_number: int) -> str:
 
         now = datetime.utcnow()
         
-        # Create analytics tournament with configuration
+        # Create analytics tournament with config from settings
         tournament = AnalyticsTournament(
             id=uuid.uuid4(),
             epoch_number=epoch_number,
@@ -84,11 +95,13 @@ def epoch_start_task(epoch_number: int) -> str:
             total_submissions=0,
             total_evaluation_runs=0,
             config={
-                "evaluation_days": 5,
+                "submission_duration_seconds": config.tournament_submission_duration_seconds,
+                "epoch_count": config.tournament_epoch_count,
+                "epoch_duration_seconds": config.tournament_epoch_duration_seconds,
                 "baseline_repository": "https://github.com/chainswarm/analyzers-baseline",
                 "baseline_version": "0.1.3",
             },
-            test_networks=["torus", "bittensor", "ethereum"],
+            test_networks=config.tournament_networks_list,
             created_at=now,
         )
         tournament = repo.create_tournament(tournament)
@@ -120,7 +133,14 @@ def epoch_start_task(epoch_number: int) -> str:
 
         # Update tournament status and counts
         tournament.total_submissions = len(submissions_data)
-        repo.update_status(tournament.id, "in_progress")
+        repo.update_status(tournament.id, "collecting")
+        
+        # Schedule orchestrator task
+        from evaluation.tasks.epoch_orchestrator_task import orchestrate_tournament_task
+        orchestrate_tournament_task.apply_async(
+            args=[str(tournament.id)],
+            countdown=5,  # Start after 5 seconds
+        )
 
         logger.info(
             "epoch_started",

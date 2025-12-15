@@ -1,28 +1,5 @@
 services:
 
-  # Local subtensor for development (use --profile localnet to enable)
-  local-subtensor:
-    container_name: local-subtensor
-    image: ghcr.io/opentensor/subtensor-localnet:devnet-ready
-    profiles:
-      - localnet
-    command: "False"
-    ports:
-      - "9994:9944"
-      - "9995:9945"
-    volumes:
-      - subtensor-data:/data
-      - subtensor-keystore:/keystore
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    networks:
-      - subnet
-
   infra-subnet-postgres:
     container_name: infra-subnet-postgres
     image: postgres:16-alpine
@@ -78,6 +55,11 @@ services:
       - BENCHMARK_MAX_EXECUTION_TIME=${BENCHMARK_MAX_EXECUTION_TIME:-3600}
       - BENCHMARK_MEMORY_LIMIT=${BENCHMARK_MEMORY_LIMIT:-16g}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=${TOURNAMENT_SUBMISSION_DURATION_SECONDS:-120}
+      - TOURNAMENT_EPOCH_COUNT=${TOURNAMENT_EPOCH_COUNT:-3}
+      - TOURNAMENT_EPOCH_DURATION_SECONDS=${TOURNAMENT_EPOCH_DURATION_SECONDS:-180}
+      - TOURNAMENT_NETWORKS=${TOURNAMENT_NETWORKS:-torus}
+      - TOURNAMENT_SCHEDULE_MODE=${TOURNAMENT_SCHEDULE_MODE:-manual}
     volumes:
       - infra-subnet-repos:/data/repos
       - infra-subnet-datasets:/data/datasets
@@ -108,6 +90,11 @@ services:
       - REDIS_URL=redis://infra-subnet-redis:6379/0
       - CELERY_BEAT_SCHEDULE_PATH=/app/evaluation/tasks/beat_schedule.json
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=${TOURNAMENT_SUBMISSION_DURATION_SECONDS:-120}
+      - TOURNAMENT_EPOCH_COUNT=${TOURNAMENT_EPOCH_COUNT:-3}
+      - TOURNAMENT_EPOCH_DURATION_SECONDS=${TOURNAMENT_EPOCH_DURATION_SECONDS:-180}
+      - TOURNAMENT_NETWORKS=${TOURNAMENT_NETWORKS:-torus}
+      - TOURNAMENT_SCHEDULE_MODE=${TOURNAMENT_SCHEDULE_MODE:-manual}
     volumes:
       - ./beat_schedule.json:/app/beat_schedule.json:ro
     restart: unless-stopped
@@ -184,6 +171,11 @@ services:
       - REPOS_PATH=/data/repos
       - DATA_PATH=/data/datasets
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=${TOURNAMENT_SUBMISSION_DURATION_SECONDS:-120}
+      - TOURNAMENT_EPOCH_COUNT=${TOURNAMENT_EPOCH_COUNT:-3}
+      - TOURNAMENT_EPOCH_DURATION_SECONDS=${TOURNAMENT_EPOCH_DURATION_SECONDS:-180}
+      - TOURNAMENT_NETWORKS=${TOURNAMENT_NETWORKS:-torus}
+      - TOURNAMENT_SCHEDULE_MODE=${TOURNAMENT_SCHEDULE_MODE:-manual}
     volumes:
       - infra-subnet-repos:/data/repos
       - infra-subnet-datasets:/data/datasets

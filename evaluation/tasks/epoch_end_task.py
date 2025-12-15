@@ -31,9 +31,9 @@ def calculate_final_rankings(
     runs = repo.get_runs_by_tournament(tournament_id)
     
     # Calculate expected runs per submission
-    evaluation_days = tournament.config.get("evaluation_days", 5)
-    network_count = len(tournament.test_networks)
-    expected_runs_per_submission = evaluation_days * network_count
+    # NEW: epoch_count × 1 network per epoch (not epoch_count × all networks)
+    epoch_count = tournament.get_epoch_count()
+    expected_runs_per_submission = epoch_count
 
     # Group runs by submission
     submission_runs = {}

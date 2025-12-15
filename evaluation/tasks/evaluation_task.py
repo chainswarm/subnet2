@@ -62,13 +62,19 @@ def run_submission_task(
     session = get_session()
     repo = TournamentRepository(session)
     submission_manager = SubmissionManager()
-    docker_manager = DockerManager()
     scoring_manager = AnalyticsScoringManager()
 
     try:
         submission = repo.get_submission_by_id(UUID(submission_id))
         if not submission:
             raise ValueError(f"submission_not_found: {submission_id}")
+        
+        # Initialize DockerManager with tournament context and hotkey for hierarchical structure
+        docker_manager = DockerManager(
+            tournament_id=submission.tournament_id,
+            epoch_number=epoch_number,
+            hotkey=submission.hotkey
+        )
 
         # Parse test_date
         test_date_obj = datetime.strptime(test_date, "%Y-%m-%d").date()
@@ -141,8 +147,8 @@ def run_submission_task(
             return {"success": False, "error": f"exit_code_{container_result.exit_code}"}
 
         # Read both output files
-        features_df = docker_manager.read_features(run.id)
-        patterns_df = docker_manager.read_patterns(run.id)
+        features_df = docker_manager.read_features()
+        patterns_df = docker_manager.read_patterns()
 
         if features_df is None or patterns_df is None:
             repo.update_evaluation_run(
@@ -194,7 +200,7 @@ def run_submission_task(
         )
 
         # Cleanup
-        docker_manager.cleanup_run(run.id)
+        docker_manager.cleanup_hotkey()
 
         logger.info(
             "evaluation_completed",
@@ -219,10 +225,96 @@ def run_submission_task(
         session.close()
 
 
+@celery_app.task(name="evaluation.run_epoch")
+def run_epoch_evaluations_task(
+    tournament_id: str,
+    epoch_number: int
+) -> dict:
+    """
+    Queue evaluations for ALL submissions for a SINGLE epoch (day).
+    
+    CRITICAL: Each epoch uses EXACTLY ONE network.
+    All miners are evaluated on that single network for this epoch.
+    
+    Example for epoch_number=0 with network="bitcoin":
+        - Evaluate Miner A on bitcoin
+        - Evaluate Miner B on bitcoin
+        - Evaluate Miner C on bitcoin
+    
+    Example for epoch_number=1 with network="zcash":
+        - Evaluate Miner A on zcash
+        - Evaluate Miner B on zcash
+        - Evaluate Miner C on zcash
+    
+    Each miner is evaluated ONCE per epoch on that epoch's network.
+    
+    Args:
+        tournament_id: UUID of the tournament
+        epoch_number: Epoch number (determines which network to use)
+        
+    Returns:
+        Dict with total runs queued
+    """
+    session = get_session()
+    repo = TournamentRepository(session)
+    
+    try:
+        tournament = repo.get_by_id(UUID(tournament_id))
+        if not tournament:
+            raise ValueError(f"tournament_not_found: {tournament_id}")
+        
+        # CRITICAL: Get THE SINGLE network for this epoch
+        # epoch 0 → bitcoin, epoch 1 → zcash, epoch 2 → bittensor, etc.
+        network = tournament.get_network_for_epoch(epoch_number)
+        
+        # Get ALL validated submissions (all miners)
+        submissions = repo.get_validated_submissions(UUID(tournament_id))
+        
+        # Calculate test date
+        base_date = tournament.started_at.date()
+        test_date = base_date + timedelta(days=epoch_number)
+        
+        queued = 0
+        
+        # Queue evaluation for EACH submission on this epoch's network
+        # This evaluates ALL miners on THE SAME network for this epoch
+        for submission in submissions:
+            run_submission_task.delay(
+                submission_id=str(submission.id),
+                epoch_number=epoch_number,
+                network=network,  # SAME network for all miners this epoch
+                test_date=test_date.strftime("%Y-%m-%d"),
+            )
+            queued += 1
+        
+        logger.info(
+            "epoch_evaluation_queued",
+            tournament_id=tournament_id,
+            epoch_number=epoch_number,
+            network=network,
+            submissions=len(submissions),
+            total_runs=queued,
+            message=f"Evaluating {len(submissions)} miners on {network} network"
+        )
+        
+        return {
+            "total_runs_queued": queued,
+            "epoch_number": epoch_number,
+            "network": network,
+            "submissions": len(submissions),
+        }
+    
+    finally:
+        session.close()
+
+
 @celery_app.task(name="evaluation.run_all_submissions")
 def run_all_submissions_task(tournament_id: str) -> dict:
     """
     Queue evaluation runs for all submissions across multiple days and networks.
+    
+    DEPRECATED: Use run_epoch_evaluations_task for new flexible timing system.
+    Kept for backward compatibility.
     
     Creates: evaluation_days × len(test_networks) runs per submission.
     Default: 5 days × 3 networks = 15 runs per submission.

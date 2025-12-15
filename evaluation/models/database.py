@@ -32,7 +32,7 @@ class AnalyticsTournament(Base):
     id = Column(PG_UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     epoch_number = Column(Integer, nullable=False, unique=True)
     status = Column(String(50), nullable=False, server_default="pending")
-    # Status values: pending, in_progress, evaluating, completed, failed
+    # Status values: pending, collecting, testing, evaluating, completed, failed
     
     # Timing
     started_at = Column(DateTime(timezone=True), nullable=True)
@@ -57,6 +57,46 @@ class AnalyticsTournament(Base):
     # Relationships
     submissions = relationship("AnalyticsTournamentSubmission", back_populates="tournament")
     results = relationship("AnalyticsTournamentResult", back_populates="tournament")
+    
+    def get_network_for_epoch(self, epoch_number: int) -> str:
+        """
+        Get network for specific epoch.
+        If epoch > network count, use last network.
+        
+        Examples:
+            networks = ["bitcoin", "zcash", "bittensor"]
+            epoch 0 → bitcoin
+            epoch 1 → zcash
+            epoch 2 → bittensor
+            epoch 3 → bittensor (repeat last)
+            epoch 4 → bittensor (repeat last)
+        """
+        networks = self.test_networks
+        if not networks:
+            raise ValueError("No test networks configured")
+        if epoch_number < len(networks):
+            return networks[epoch_number]
+        return networks[-1]
+    
+    @property
+    def total_expected_runs(self) -> int:
+        """Calculate total expected evaluation runs"""
+        epoch_count = self.get_epoch_count()
+        submission_count = self.total_submissions
+        return epoch_count * submission_count
+    
+    def get_epoch_count(self) -> int:
+        """Get epoch count with backward compatibility"""
+        if not self.config:
+            return 5  # Default
+        # New format
+        if "epoch_count" in self.config:
+            return self.config["epoch_count"]
+        # Old format fallback
+        if "evaluation_days" in self.config:
+            return self.config["evaluation_days"]
+        # Default
+        return 5
 
 
 class AnalyticsTournamentSubmission(Base):

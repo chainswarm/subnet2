@@ -60,22 +60,27 @@ class ScoreResult:
 
 class AnalyticsScoringManager:
     """
-    Scoring manager for Analytics tournaments.
+    Scoring manager for Analytics tournaments with STRICT anti-cheat.
     
-    Weights:
-        - Feature Performance: 10%
-        - Synthetic Recall: 30%
-        - Pattern Precision: 25% (anti-cheat)
-        - Novelty Discovery: 25%
-        - Pattern Performance: 10%
+    GATES (Zero Tolerance - ANY violation = score 0):
+        1. Schema Validation: Features must match schema (2% column variation allowed)
+        2. Pattern Validity: ALL patterns must have verified flows in transfers.parquet
+    
+    SCORING (After passing gates):
+        - Feature Performance: 25%
+        - Synthetic Detection: 50%
+        - Innovation Discovery: 25%
+    
+    Note: Pattern Precision is NOT a score - it's a GATE. ANY fake pattern = disqualification.
     """
     
-    # Scoring weights
-    FEATURE_PERFORMANCE_WEIGHT = 0.10
-    SYNTHETIC_RECALL_WEIGHT = 0.30
-    PATTERN_PRECISION_WEIGHT = 0.25
+    # Scoring weights (after gates passed)
+    FEATURE_PERFORMANCE_WEIGHT = 0.25
+    SYNTHETIC_RECALL_WEIGHT = 0.50
     NOVELTY_DISCOVERY_WEIGHT = 0.25
-    PATTERN_PERFORMANCE_WEIGHT = 0.10
+    
+    # Feature schema tolerance
+    FEATURE_COLUMN_TOLERANCE = 0.02  # Allow 2% column variation
     
     # Novelty cap (prevents gaming by reporting excessive novelties)
     NOVELTY_CAP_RATIO = 0.5  # Cap at 50% of synthetic count
@@ -90,42 +95,36 @@ class AnalyticsScoringManager:
     
     def __init__(
         self,
-        feature_weight: float = 0.10,
-        synthetic_weight: float = 0.30,
-        precision_weight: float = 0.25,
+        feature_weight: float = 0.25,
+        synthetic_weight: float = 0.50,
         novelty_weight: float = 0.25,
-        performance_weight: float = 0.10,
         novelty_cap_ratio: float = 0.5,
         baseline_feature_time: float = 30.0,
         baseline_pattern_time: float = 120.0,
+        feature_column_tolerance: float = 0.02,
     ):
         """
-        Initialize the scoring manager with configurable weights.
+        Initialize scoring manager with STRICT anti-cheat gates.
         
         Args:
-            feature_weight: Weight for feature generation performance (default 10%)
-            synthetic_weight: Weight for synthetic pattern recall (default 30%)
-            precision_weight: Weight for pattern precision (default 25%)
+            feature_weight: Weight for feature performance (default 25%)
+            synthetic_weight: Weight for synthetic recall (default 50%)
             novelty_weight: Weight for novelty discovery (default 25%)
-            performance_weight: Weight for pattern detection performance (default 10%)
             novelty_cap_ratio: Cap for novelty credit as ratio of synthetic count
             baseline_feature_time: Baseline time for feature generation (seconds)
             baseline_pattern_time: Baseline time for pattern detection (seconds)
+            feature_column_tolerance: Allowed column variation (default 2%)
         """
         self.feature_weight = feature_weight
         self.synthetic_weight = synthetic_weight
-        self.precision_weight = precision_weight
         self.novelty_weight = novelty_weight
-        self.performance_weight = performance_weight
         self.novelty_cap_ratio = novelty_cap_ratio
         self.baseline_feature_time = baseline_feature_time
         self.baseline_pattern_time = baseline_pattern_time
+        self.feature_column_tolerance = feature_column_tolerance
         
         # Validate weights sum to 1.0
-        total_weight = (
-            feature_weight + synthetic_weight + precision_weight +
-            novelty_weight + performance_weight
-        )
+        total_weight = feature_weight + synthetic_weight + novelty_weight
         if abs(total_weight - 1.0) > 0.001:
             raise ValueError(f"Weights must sum to 1.0, got {total_weight}")
     
@@ -434,11 +433,11 @@ class AnalyticsScoringManager:
         Returns:
             ScoreResult with all component scores and final score
         """
-        # Gate 1: Output Schema Validation
+        # Gate 1: Output Schema Validation (2% tolerance)
         output_schema_valid = self.validate_output_schema(features_df, patterns_df)
         
         if not output_schema_valid:
-            logger.warning("Output schema validation failed - score = 0.0")
+            logger.warning("Gate 1 FAILED: Invalid schema - DISQUALIFIED")
             return ScoreResult(
                 output_schema_valid=False,
                 pattern_existence=False,
@@ -462,7 +461,32 @@ class AnalyticsScoringManager:
             patterns_df, transfers_df, ground_truth_df
         )
         
-        # Gate 2: Pattern Existence
+        # Gate 2: Pattern Validity - ZERO TOLERANCE for fake patterns
+        if validation.novelty_invalid > 0:
+            logger.warning(
+                "Gate 2 FAILED: Fake patterns detected - DISQUALIFIED",
+                fake_patterns=validation.novelty_invalid,
+                total_reported=validation.total_reported,
+            )
+            return ScoreResult(
+                output_schema_valid=True,
+                pattern_existence=False,
+                feature_generation_time=feature_generation_time,
+                pattern_detection_time=pattern_detection_time,
+                patterns_reported=validation.total_reported,
+                synthetic_addresses_expected=validation.synthetic_addresses_expected,
+                synthetic_addresses_found=validation.synthetic_addresses_found,
+                novelty_valid=validation.novelty_valid,
+                novelty_invalid=validation.novelty_invalid,
+                feature_performance_score=0.0,
+                synthetic_recall_score=0.0,
+                pattern_precision_score=0.0,
+                novelty_discovery_score=0.0,
+                pattern_performance_score=0.0,
+                final_score=0.0,
+            )
+        
+        # Gate 3: Pattern Existence
         total_valid = validation.synthetic_addresses_found + validation.novelty_valid
         pattern_existence = total_valid > 0
         
@@ -478,23 +502,15 @@ class AnalyticsScoringManager:
             validation.synthetic_addresses_expected
         )
         
-        precision = self.calculate_precision(validation)
-        
         novelty_score = self.calculate_novelty_score(
             validation.novelty_valid,
             validation.synthetic_addresses_expected
         )
         
-        pattern_performance = self.calculate_performance_score(
-            pattern_detection_time,
-            self.baseline_pattern_time,
-            self.MAX_PATTERN_DETECTION_TIME
-        )
-        
-        # Calculate final score
+        # Calculate final score (3 components only - precision is a gate, not a score)
         if not pattern_existence:
-            # Only feature performance applies (max 10% of total)
-            final_score = self.feature_weight * feature_performance
+            # No valid patterns - only feature performance applies
+            final_score = self.FEATURE_PERFORMANCE_WEIGHT * feature_performance
             logger.info(
                 "No valid patterns - limited scoring",
                 feature_performance=feature_performance,
@@ -502,21 +518,18 @@ class AnalyticsScoringManager:
             )
         else:
             final_score = (
-                self.feature_weight * feature_performance +
-                self.synthetic_weight * synthetic_recall +
-                self.precision_weight * precision +
-                self.novelty_weight * novelty_score +
-                self.performance_weight * pattern_performance
+                self.FEATURE_PERFORMANCE_WEIGHT * feature_performance +
+                self.SYNTHETIC_RECALL_WEIGHT * synthetic_recall +
+                self.NOVELTY_DISCOVERY_WEIGHT * novelty_score
             )
         
         logger.info(
             "score_calculated",
             feature_performance=feature_performance,
             synthetic_recall=synthetic_recall,
-            precision=precision,
             novelty_score=novelty_score,
-            pattern_performance=pattern_performance,
             final_score=final_score,
+            fake_patterns=validation.novelty_invalid,
         )
         
         return ScoreResult(
@@ -531,9 +544,9 @@ class AnalyticsScoringManager:
             novelty_invalid=validation.novelty_invalid,
             feature_performance_score=feature_performance,
             synthetic_recall_score=synthetic_recall,
-            pattern_precision_score=precision,
+            pattern_precision_score=1.0,  # Always 1.0 if gates passed (precision is gate, not score)
             novelty_discovery_score=novelty_score,
-            pattern_performance_score=pattern_performance,
+            pattern_performance_score=0.0,  # Not used in final score
             final_score=final_score,
         )
     

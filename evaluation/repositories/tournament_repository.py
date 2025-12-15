@@ -35,9 +35,15 @@ class TournamentRepository:
             AnalyticsTournament.epoch_number == epoch_number
         ).first()
 
+    def get_latest_tournament(self) -> Optional[AnalyticsTournament]:
+        """Get most recent tournament by epoch number"""
+        return self.session.query(AnalyticsTournament)\
+            .order_by(AnalyticsTournament.epoch_number.desc())\
+            .first()
+
     def get_active_tournament(self) -> Optional[AnalyticsTournament]:
         return self.session.query(AnalyticsTournament).filter(
-            AnalyticsTournament.status.in_(["pending", "in_progress", "evaluating"])
+            AnalyticsTournament.status.in_(["pending", "collecting", "testing", "evaluating"])
         ).first()
 
     def update_status(

@@ -124,6 +124,11 @@ class SubmissionResponse(BaseModel):
         description="Docker image digest for reproducible evaluation",
         examples=["sha256:a1b2c3d4e5f6..."],
     )
+    repository_url: Optional[str] = Field(
+        None,
+        description="GitHub repository URL for the miner's analyzer submission",
+        examples=["https://github.com/miner42/advanced-analyzer"],
+    )
     status: str = Field(
         ...,
         description="Submission status: pending, validating, valid, or invalid",
