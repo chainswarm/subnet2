@@ -1,0 +1,999 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Subnet Analytics Tournaments API",
+    "description": "# Subnet Analytics Tournaments API\n\nPattern detection & feature generation evaluation platform for the Bittensor Subnet.\n\n## Tournament Scoring (Three Pillars)\n\nMiners are evaluated on **three pillars**:\n\n### 1. Features (10%)\n- Output schema validation for `features.parquet`\n- Generation performance relative to baseline\n\n### 2. Patterns (55%)\n- **Synthetic Recall (30%)**: % of ground_truth addresses detected\n- **Pattern Precision (25%)**: Anti-cheat via flow tracing validation\n\n### 3. Novelty (25%) + Performance (10%)\n- **Novelty Discovery (25%)**: New valid patterns beyond ground_truth\n- **Pattern Performance (10%)**: Detection speed relative to baseline\n\n## Flow Tracing Validation\n\nAll patterns (synthetic and novelty) are validated by verifying transaction flows exist in `transfers.parquet`. This prevents gaming through fake patterns.\n\n## API Versioning\n\nCurrent version: `v1`\n\nAll endpoints use `/api/v1/analytics/` prefix.\n\n## Authentication\n\nThis is a **read-only public API**. No authentication required.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Subnet Team",
+      "url": "https://github.com/subnet"
+    },
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Tournaments",
+      "description": "Analytics pattern detection & feature generation tournaments.\n\nMiners are evaluated on three pillars:\n- **Features**: Schema validation and generation performance (10%)\n- **Synthetic Patterns**: Recall of known patterns from ground_truth (30%)\n- **Pattern Precision**: Anti-cheat via flow tracing (25%)\n- **Novelty Patterns**: Discovery of new valid patterns (25%)\n- **Performance**: Detection speed (10%)\n\nAll patterns are validated by tracing actual flows in `transfers.parquet`."
+    },
+    {
+      "name": "Stats",
+      "description": "Statistics and metrics for tournaments.\n\nProvides aggregate statistics, miner history, and epoch-level metrics.\nUseful for dashboards and performance tracking."
+    },
+    {
+      "name": "Health",
+      "description": "Service health check endpoints."
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Health Check",
+        "description": "Returns the health status of the API service. Use this endpoint for monitoring and load balancer health checks.",
+        "operationId": "health_check",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "example": {
+                  "status": "healthy",
+                  "service": "analytics-tournament-api",
+                  "version": "1.0.0"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/tournaments": {
+      "get": {
+        "tags": ["Tournaments"],
+        "summary": "List Tournaments",
+        "description": "Retrieve a paginated list of all analytics tournaments. Tournaments are ordered by epoch number in descending order (most recent first).\n\n**Use Cases:**\n- Display tournament history on dashboard\n- Load tournament selector dropdown\n- Monitor tournament status",
+        "operationId": "list_tournaments",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SkipParam"
+          },
+          {
+            "$ref": "#/components/parameters/LimitParam"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filter by tournament status",
+            "schema": {
+              "type": "string",
+              "enum": ["pending", "running", "completed", "failed"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of tournaments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TournamentResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/tournaments/{tournament_id}": {
+      "get": {
+        "tags": ["Tournaments"],
+        "summary": "Get Tournament Details",
+        "description": "Retrieve detailed information about a specific tournament including configuration, test networks, and baseline information.\n\n**Use Cases:**\n- Display tournament detail page\n- Load tournament configuration\n- Check tournament completion status",
+        "operationId": "get_tournament",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TournamentIdParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tournament details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TournamentDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tournament not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/tournaments/{tournament_id}/leaderboard": {
+      "get": {
+        "tags": ["Tournaments"],
+        "summary": "Get Tournament Leaderboard",
+        "description": "Retrieve the leaderboard for a specific tournament showing all miners ranked by final score.\n\nThe leaderboard includes:\n- Miner ranking and final scores\n- Component score breakdown (feature, synthetic, precision, novelty, performance)\n- Pattern detection statistics\n- Baseline comparison results\n\n**Use Cases:**\n- Display tournament leaderboard on dashboard\n- Show winner and top performers\n- Analyze score distribution",
+        "operationId": "get_tournament_leaderboard",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TournamentIdParam"
+          },
+          {
+            "$ref": "#/components/parameters/LimitParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tournament leaderboard with ranked miners",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaderboardResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tournament not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/tournaments/{tournament_id}/results": {
+      "get": {
+        "tags": ["Tournaments"],
+        "summary": "Get Tournament Results",
+        "description": "Retrieve all results for a specific tournament. Similar to leaderboard but includes additional aggregation data.\n\n**Use Cases:**\n- Export tournament results\n- Generate reports\n- Analyze detailed performance metrics",
+        "operationId": "get_tournament_results",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TournamentIdParam"
+          },
+          {
+            "$ref": "#/components/parameters/SkipParam"
+          },
+          {
+            "$ref": "#/components/parameters/LimitParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tournament results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TournamentResultResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tournament not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/tournaments/{tournament_id}/submissions": {
+      "get": {
+        "tags": ["Tournaments"],
+        "summary": "Get Tournament Submissions",
+        "description": "Retrieve all miner submissions for a specific tournament.\n\n**Use Cases:**\n- View submission statuses\n- Monitor validation progress\n- Track miner participation",
+        "operationId": "get_tournament_submissions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TournamentIdParam"
+          },
+          {
+            "$ref": "#/components/parameters/SkipParam"
+          },
+          {
+            "$ref": "#/components/parameters/LimitParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tournament submissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SubmissionResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tournament not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/tournaments/{tournament_id}/runs": {
+      "get": {
+        "tags": ["Tournaments"],
+        "summary": "Get Evaluation Runs",
+        "description": "Retrieve all evaluation runs for a specific tournament. Each run represents one miner's evaluation on one test network.\n\nRun data includes:\n- Schema validation results\n- Synthetic pattern recall metrics\n- Novelty pattern discovery metrics\n- Flow tracing validation results\n- Performance timing\n\n**Use Cases:**\n- Debug miner performance issues\n- Analyze per-network results\n- Track evaluation progress",
+        "operationId": "get_tournament_runs",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TournamentIdParam"
+          },
+          {
+            "name": "submission_id",
+            "in": "query",
+            "required": false,
+            "description": "Filter runs by specific submission",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "network",
+            "in": "query",
+            "required": false,
+            "description": "Filter runs by test network",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/SkipParam"
+          },
+          {
+            "$ref": "#/components/parameters/LimitParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evaluation runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EvaluationRunResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tournament not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/stats": {
+      "get": {
+        "tags": ["Stats"],
+        "summary": "Get Overall Statistics",
+        "description": "Retrieve overall tournament statistics including total tournaments, miners, and aggregate performance metrics.\n\n**Use Cases:**\n- Dashboard overview statistics\n- System health monitoring\n- Historical trend analysis",
+        "operationId": "get_stats",
+        "responses": {
+          "200": {
+            "description": "Overall statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/stats/miners/{hotkey}": {
+      "get": {
+        "tags": ["Stats"],
+        "summary": "Get Miner History",
+        "description": "Retrieve historical performance data for a specific miner across all tournaments.\n\n**Use Cases:**\n- Display miner profile page\n- Track miner improvement over time\n- Analyze performance trends",
+        "operationId": "get_miner_history",
+        "parameters": [
+          {
+            "name": "hotkey",
+            "in": "path",
+            "required": true,
+            "description": "Miner's hotkey (SS58 address)",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9]{48}$",
+              "example": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/SkipParam"
+          },
+          {
+            "$ref": "#/components/parameters/LimitParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Miner performance history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MinerHistoryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Miner not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analytics/stats/epochs/{epoch_number}": {
+      "get": {
+        "tags": ["Stats"],
+        "summary": "Get Epoch Statistics",
+        "description": "Retrieve statistics for a specific epoch's tournament.\n\n**Use Cases:**\n- Compare epoch performance\n- Analyze historical data\n- Generate epoch reports",
+        "operationId": "get_epoch_stats",
+        "parameters": [
+          {
+            "name": "epoch_number",
+            "in": "path",
+            "required": true,
+            "description": "Epoch number",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "example": 42
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Epoch statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpochStatsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Epoch not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "TournamentIdParam": {
+        "name": "tournament_id",
+        "in": "path",
+        "required": true,
+        "description": "Unique tournament identifier",
+        "schema": {
+          "type": "string",
+          "format": "uuid",
+          "example": "550e8400-e29b-41d4-a716-446655440000"
+        }
+      },
+      "SkipParam": {
+        "name": "skip",
+        "in": "query",
+        "required": false,
+        "description": "Number of records to skip for pagination",
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      },
+      "LimitParam": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "Maximum number of records to return",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "required": ["status", "service", "version"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["healthy", "unhealthy"],
+            "description": "Service health status"
+          },
+          "service": {
+            "type": "string",
+            "description": "Service identifier"
+          },
+          "version": {
+            "type": "string",
+            "description": "API version"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["detail"],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      },
+      "TournamentResponse": {
+        "type": "object",
+        "required": ["id", "epoch_number", "status", "total_submissions", "total_evaluation_runs", "created_at"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique tournament identifier"
+          },
+          "epoch_number": {
+            "type": "integer",
+            "description": "Epoch number for this tournament"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "running", "completed", "failed"],
+            "description": "Current tournament status"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the tournament started evaluation"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the tournament completed"
+          },
+          "total_submissions": {
+            "type": "integer",
+            "description": "Number of miner submissions"
+          },
+          "total_evaluation_runs": {
+            "type": "integer",
+            "description": "Number of evaluation runs executed"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the tournament was created"
+          }
+        }
+      },
+      "TournamentDetailResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TournamentResponse"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "config": {
+                "type": "object",
+                "description": "Tournament configuration parameters",
+                "additionalProperties": true
+              },
+              "test_networks": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "List of blockchain networks used for evaluation"
+              },
+              "baseline_repository": {
+                "type": "string",
+                "nullable": true,
+                "description": "Git repository URL for baseline implementation"
+              },
+              "baseline_version": {
+                "type": "string",
+                "nullable": true,
+                "description": "Version/tag of baseline implementation"
+              }
+            }
+          }
+        ]
+      },
+      "SubmissionResponse": {
+        "type": "object",
+        "required": ["id", "tournament_id", "hotkey", "uid", "docker_image_digest", "status", "submitted_at"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tournament_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "hotkey": {
+            "type": "string",
+            "description": "Miner's SS58 hotkey address"
+          },
+          "uid": {
+            "type": "integer",
+            "description": "Miner's UID on the subnet"
+          },
+          "docker_image_digest": {
+            "type": "string",
+            "description": "Docker image digest for reproducibility"
+          },
+          "repository_url": {
+            "type": "string",
+            "nullable": true,
+            "description": "Source repository URL"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "validated", "rejected"],
+            "description": "Submission validation status"
+          },
+          "validation_error": {
+            "type": "string",
+            "nullable": true,
+            "description": "Reason for rejection if status is 'rejected'"
+          },
+          "submitted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validated_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "EvaluationRunResponse": {
+        "type": "object",
+        "description": "Individual evaluation run with three-pillar scoring breakdown",
+        "required": ["id", "submission_id", "epoch_number", "network", "test_date", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "submission_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "epoch_number": {
+            "type": "integer"
+          },
+          "network": {
+            "type": "string",
+            "description": "Blockchain network tested (e.g., 'ethereum', 'polygon')"
+          },
+          "test_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Date of the test data"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "running", "completed", "failed"]
+          },
+          "output_schema_valid": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Gate 1: Whether output matches expected schema"
+          },
+          "feature_generation_time_seconds": {
+            "type": "number",
+            "nullable": true,
+            "description": "Time to generate features in seconds"
+          },
+          "pattern_existence": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Gate 2: Whether patterns were reported"
+          },
+          "patterns_reported": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Total number of patterns reported by miner"
+          },
+          "synthetic_addresses_expected": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Number of addresses in ground_truth"
+          },
+          "synthetic_addresses_found": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Number of ground_truth addresses detected"
+          },
+          "novelty_patterns_valid": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Number of novel patterns validated via flow tracing"
+          },
+          "novelty_patterns_invalid": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Number of novel patterns that failed flow tracing"
+          },
+          "pattern_detection_time_seconds": {
+            "type": "number",
+            "nullable": true,
+            "description": "Time to detect patterns in seconds"
+          },
+          "feature_performance_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true,
+            "description": "Feature generation score (10% weight)"
+          },
+          "synthetic_recall_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true,
+            "description": "Synthetic pattern recall score (30% weight)"
+          },
+          "pattern_precision_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true,
+            "description": "Anti-cheat precision score (25% weight)"
+          },
+          "novelty_discovery_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true,
+            "description": "Novel pattern discovery score (25% weight)"
+          },
+          "pattern_performance_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true,
+            "description": "Detection speed score (10% weight)"
+          },
+          "final_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true,
+            "description": "Weighted final score"
+          },
+          "exit_code": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Container exit code (0 = success)"
+          },
+          "error_message": {
+            "type": "string",
+            "nullable": true,
+            "description": "Error message if run failed"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "TournamentResultResponse": {
+        "type": "object",
+        "description": "Aggregated tournament result for a miner",
+        "required": ["id", "tournament_id", "hotkey", "uid", "final_score", "rank"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tournament_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "hotkey": {
+            "type": "string"
+          },
+          "uid": {
+            "type": "integer"
+          },
+          "output_schema_validity_rate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true,
+            "description": "Percentage of runs passing schema validation"
+          },
+          "pattern_existence_rate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true,
+            "description": "Percentage of runs finding patterns"
+          },
+          "feature_performance_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true
+          },
+          "synthetic_recall_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true
+          },
+          "pattern_precision_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true
+          },
+          "novelty_discovery_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true
+          },
+          "pattern_performance_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "nullable": true
+          },
+          "total_runs": {
+            "type": "integer",
+            "nullable": true
+          },
+          "total_patterns_reported": {
+            "type": "integer",
+            "nullable": true
+          },
+          "total_synthetic_found": {
+            "type": "integer",
+            "nullable": true
+          },
+          "total_novelty_valid": {
+            "type": "integer",
+            "nullable": true
+          },
+          "total_novelty_invalid": {
+            "type": "integer",
+            "nullable": true
+          },
+          "final_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "beat_baseline": {
+            "type": "boolean",
+            "description": "Whether this miner beat the baseline"
+          },
+          "is_winner": {
+            "type": "boolean",
+            "description": "Whether this is the tournament winner"
+          },
+          "calculated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LeaderboardResponse": {
+        "type": "object",
+        "required": ["tournament_id", "epoch_number", "entries"],
+        "properties": {
+          "tournament_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "epoch_number": {
+            "type": "integer"
+          },
+          "total_participants": {
+            "type": "integer"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TournamentResultResponse"
+            }
+          }
+        }
+      },
+      "MinerHistoryResponse": {
+        "type": "object",
+        "required": ["hotkey", "results"],
+        "properties": {
+          "hotkey": {
+            "type": "string"
+          },
+          "total_tournaments": {
+            "type": "integer"
+          },
+          "total_wins": {
+            "type": "integer"
+          },
+          "average_rank": {
+            "type": "number"
+          },
+          "average_score": {
+            "type": "number"
+          },
+          "best_rank": {
+            "type": "integer"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TournamentResultResponse"
+            }
+          }
+        }
+      },
+      "StatsResponse": {
+        "type": "object",
+        "properties": {
+          "total_tournaments": {
+            "type": "integer"
+          },
+          "total_miners": {
+            "type": "integer"
+          },
+          "total_evaluation_runs": {
+            "type": "integer"
+          },
+          "average_synthetic_recall": {
+            "type": "number"
+          },
+          "average_pattern_precision": {
+            "type": "number"
+          },
+          "average_novelty_discovery": {
+            "type": "number"
+          },
+          "latest_tournament": {
+            "$ref": "#/components/schemas/TournamentResponse"
+          }
+        }
+      },
+      "EpochStatsResponse": {
+        "type": "object",
+        "required": ["epoch_number"],
+        "properties": {
+          "epoch_number": {
+            "type": "integer"
+          },
+          "tournament_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "total_participants": {
+            "type": "integer"
+          },
+          "average_score": {
+            "type": "number"
+          },
+          "top_score": {
+            "type": "number"
+          },
+          "winner_hotkey": {
+            "type": "string",
+            "nullable": true
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      }
+    }
+  }
+}

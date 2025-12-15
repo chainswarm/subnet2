@@ -18,6 +18,7 @@
 # DEALINGS IN THE SOFTWARE.
 
 
+import asyncio
 import time
 
 # Bittensor
@@ -26,17 +27,18 @@ import bittensor as bt
 # import base validator class which takes care of most of the boilerplate
 from template.base.validator import BaseValidatorNeuron
 
-# Bittensor Validator Template:
-from template.validator import forward
-
 
 class Validator(BaseValidatorNeuron):
     """
-    Your validator neuron class. You should use this class to define your validator's behavior. In particular, you should replace the forward function with your own logic.
-
-    This class inherits from the BaseValidatorNeuron class, which in turn inherits from BaseNeuron. The BaseNeuron class takes care of routine tasks such as setting up wallet, subtensor, metagraph, logging directory, parsing config, etc. You can override any of the methods in BaseNeuron if you need to customize the behavior.
-
-    This class provides reasonable default behavior for a validator such as keeping a moving average of the scores of the miners and using them to set weights at the end of each epoch. Additionally, the scores are reset for new hotkeys at the end of each epoch.
+    Analytics Tournament Validator - Tournament-Only Mode.
+    
+    This validator operates exclusively via tournament-based evaluation:
+    - epoch_start_task (00:00 UTC): Collects submissions via SubmissionSynapse
+    - evaluation_task (hourly): Runs and scores containers across 5 days × 3 networks
+    - epoch_end_task (23:00 UTC): Calculates rankings, sets weights on-chain
+    
+    The validator does NOT perform standard forward passes or set weights directly.
+    All evaluation logic is handled by Celery background tasks.
     """
 
     def __init__(self, config=None):
@@ -45,19 +47,77 @@ class Validator(BaseValidatorNeuron):
         bt.logging.info("load_state()")
         self.load_state()
 
-        # TODO(developer): Anything specific to your use case you can do here
+        bt.logging.info("Analytics Tournament Validator initialized - tournament-only mode")
 
     async def forward(self):
         """
-        Validator forward pass. Consists of:
-        - Generating the query
-        - Querying the miners
-        - Getting the responses
-        - Rewarding the miners
-        - Updating the scores
+        Tournament-only validator - NO standard forward pass.
+        
+        All tournament logic is handled by Celery tasks:
+        - epoch_start_task (00:00): Collect submissions via SubmissionSynapse
+        - evaluation_task (hourly): Run and score containers
+        - epoch_end_task (23:00): Calculate rankings, set weights
+        
+        This validator just maintains metagraph sync and serves axon for SubmissionSynapse.
         """
-        # TODO(developer): Rewrite this function based on your protocol definition.
-        return await forward(self)
+        from evaluation.repositories.tournament_repository import TournamentRepository
+        from evaluation.db import get_session
+        
+        session = get_session()
+        repo = TournamentRepository(session)
+        
+        try:
+            tournament = repo.get_active_tournament()
+            
+            if tournament:
+                bt.logging.debug(
+                    f"Analytics tournament epoch {tournament.epoch_number} "
+                    f"status={tournament.status} - managed by Celery tasks"
+                )
+            else:
+                bt.logging.debug("No active tournament - waiting for epoch_start_task")
+            
+            # Sleep to maintain event loop
+            await asyncio.sleep(5)
+            
+        except Exception as e:
+            bt.logging.error(f"Error checking tournament status: {e}")
+            await asyncio.sleep(5)
+            
+        finally:
+            session.close()
+
+    def set_weights(self):
+        """
+        Override to prevent weight setting conflicts.
+        
+        Analytics tournaments: Weights set by epoch_end_task ONLY.
+        This validator does NOT set weights via standard loop.
+        """
+        from evaluation.repositories.tournament_repository import TournamentRepository
+        from evaluation.db import get_session
+        
+        session = get_session()
+        repo = TournamentRepository(session)
+        
+        try:
+            tournament = repo.get_active_tournament()
+            
+            if tournament:
+                bt.logging.info(
+                    f"Tournament epoch {tournament.epoch_number} active - "
+                    f"weights managed by epoch_end_task. Skipping standard weight setting."
+                )
+                return
+            
+            # No tournament - but analytics subnet is tournament-only
+            bt.logging.info("No active tournament - weights will be set by epoch_end_task when tournament completes")
+            
+        except Exception as e:
+            bt.logging.error(f"Error checking tournament for weight setting: {e}")
+            
+        finally:
+            session.close()
 
 
 # The main function parses the configuration and runs the validator.

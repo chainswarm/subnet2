@@ -85,17 +85,75 @@ class DockerManager:
         finally:
             subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
 
-    def read_output(self, run_id: UUID) -> Optional[pd.DataFrame]:
-        output_path = self.data_dir / str(run_id) / "output" / "patterns.parquet"
-        if not output_path.exists():
+    def read_features(self, run_id: UUID) -> Optional[pd.DataFrame]:
+        """
+        Read features.parquet output from miner container.
+        
+        Args:
+            run_id: The evaluation run ID
+            
+        Returns:
+            DataFrame with features or None if not found
+        """
+        features_path = self.data_dir / str(run_id) / "output" / "features.parquet"
+        
+        if not features_path.exists():
+            logger.warning("features_not_found", run_id=str(run_id))
             return None
+        
         try:
-            return pd.read_parquet(output_path)
+            df = pd.read_parquet(features_path)
+            logger.debug("features_loaded", run_id=str(run_id), rows=len(df))
+            return df
         except Exception as e:
-            logger.warning("output_read_failed", run_id=str(run_id), error=str(e))
+            logger.error("features_read_error", run_id=str(run_id), error=str(e))
             return None
 
+    def read_patterns(self, run_id: UUID) -> Optional[pd.DataFrame]:
+        """
+        Read patterns output from miner container.
+        
+        Handles both:
+        - Single patterns.parquet file
+        - Multiple patterns_*.parquet files (merged)
+        
+        Args:
+            run_id: The evaluation run ID
+            
+        Returns:
+            DataFrame with patterns or None if not found
+        """
+        output_dir = self.data_dir / str(run_id) / "output"
+        patterns_path = output_dir / "patterns.parquet"
+        
+        # Try single patterns.parquet first
+        if patterns_path.exists():
+            try:
+                df = pd.read_parquet(patterns_path)
+                logger.debug("patterns_loaded", run_id=str(run_id), rows=len(df))
+                return df
+            except Exception as e:
+                logger.error("patterns_read_error", run_id=str(run_id), error=str(e))
+                return None
+        
+        # Try multiple patterns_*.parquet files
+        pattern_files = list(output_dir.glob("patterns_*.parquet"))
+        
+        if pattern_files:
+            try:
+                dfs = [pd.read_parquet(f) for f in pattern_files]
+                merged = pd.concat(dfs, ignore_index=True)
+                logger.debug("patterns_merged", run_id=str(run_id), files=len(pattern_files), rows=len(merged))
+                return merged
+            except Exception as e:
+                logger.error("patterns_merge_error", run_id=str(run_id), error=str(e))
+                return None
+        
+        logger.warning("no_patterns_output", run_id=str(run_id))
+        return None
+
     def cleanup_run(self, run_id: UUID) -> None:
+        """Clean up run directory after evaluation."""
         run_dir = self.data_dir / str(run_id)
         if run_dir.exists():
             shutil.rmtree(run_dir)

@@ -1,12 +1,12 @@
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List
 
 import bittensor as bt
 from loguru import logger
 
 from evaluation.db import get_session
-from evaluation.models.database import Tournament, Submission
+from evaluation.models.database import AnalyticsTournament, AnalyticsTournamentSubmission
 from evaluation.repositories.tournament_repository import TournamentRepository
 from evaluation.tasks.celery_app import celery_app
 from template.protocol import SubmissionSynapse
@@ -16,7 +16,7 @@ from config import config
 def collect_submissions_from_miners(
     dendrite: bt.Dendrite,
     metagraph: bt.Metagraph,
-    tournament: Tournament,
+    tournament: AnalyticsTournament,
 ) -> List[dict]:
     synapse = SubmissionSynapse(
         tournament_id=str(tournament.id),
@@ -46,57 +46,88 @@ def collect_submissions_from_miners(
 
 
 @celery_app.task(name="evaluation.epoch_start")
-def epoch_start_task(netuid: int, tournament_name: str) -> str:
+def epoch_start_task(epoch_number: int) -> str:
+    """
+    Start a new analytics tournament epoch.
+    
+    Creates tournament record, collects submissions from miners via SubmissionSynapse,
+    and prepares for evaluation.
+    
+    Args:
+        epoch_number: The epoch number for this tournament
+        
+    Returns:
+        Tournament ID as string
+    """
     session = get_session()
     repo = TournamentRepository(session)
 
     try:
-        existing = repo.get_active_by_netuid(netuid)
+        # Check if epoch already exists
+        existing = repo.get_by_epoch(epoch_number)
         if existing:
-            raise ValueError(f"active_tournament_exists: {existing.id}")
+            raise ValueError(f"epoch_already_exists: {epoch_number}")
+
+        # Check for active tournament
+        active = repo.get_active_tournament()
+        if active:
+            raise ValueError(f"active_tournament_exists: epoch {active.epoch_number}")
 
         now = datetime.utcnow()
-        tournament = Tournament(
+        
+        # Create analytics tournament with configuration
+        tournament = AnalyticsTournament(
             id=uuid.uuid4(),
-            netuid=netuid,
-            name=tournament_name,
-            status="registration",
-            registration_start=now,
-            registration_end=now + timedelta(hours=1),
-            start_block=0,
-            end_block=360,
-            epoch_blocks=360,
-            test_networks=["ethereum", "bsc"],
+            epoch_number=epoch_number,
+            status="pending",
+            started_at=now,
+            total_submissions=0,
+            total_evaluation_runs=0,
+            config={
+                "evaluation_days": 5,
+                "baseline_repository": "https://github.com/chainswarm/analyzers-baseline",
+                "baseline_version": "0.1.3",
+            },
+            test_networks=["torus", "bittensor", "ethereum"],
             created_at=now,
         )
         tournament = repo.create_tournament(tournament)
 
+        # Initialize Bittensor components
         wallet = bt.Wallet(name=config.wallet_name, hotkey=config.wallet_hotkey)
         subtensor = bt.Subtensor(network=config.subtensor_network)
+        # TODO: Get netuid from config
+        netuid = 1
         metagraph = subtensor.metagraph(netuid=netuid)
         dendrite = bt.Dendrite(wallet=wallet)
 
+        # Collect submissions from all miners
         submissions_data = collect_submissions_from_miners(dendrite, metagraph, tournament)
 
+        # Create submission records
         for sub_data in submissions_data:
-            submission = Submission(
+            submission = AnalyticsTournamentSubmission(
                 id=uuid.uuid4(),
                 tournament_id=tournament.id,
-                uid=sub_data["uid"],
                 hotkey=sub_data["hotkey"],
+                uid=sub_data["uid"],
+                docker_image_digest="",  # Will be filled after build
                 repository_url=sub_data["repository_url"],
-                commit_hash=sub_data["commit_hash"],
                 status="pending",
                 submitted_at=now,
             )
             repo.create_submission(submission)
 
-        repo.update_status(tournament.id, "active")
+        # Update tournament status and counts
+        tournament.total_submissions = len(submissions_data)
+        repo.update_status(tournament.id, "in_progress")
 
         logger.info(
             "epoch_started",
             tournament_id=str(tournament.id),
+            epoch_number=epoch_number,
             submissions=len(submissions_data),
+            test_networks=tournament.test_networks,
         )
 
         return str(tournament.id)
