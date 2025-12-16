@@ -1,5 +1,47 @@
+# =============================================================================
+# Docker Compose Configuration for Subnet2 Evaluation Infrastructure
+# =============================================================================
+# This is the BASE configuration file containing all application services.
+# It can be used standalone for development or extended with network-specific
+# configurations for testnet/mainnet deployments.
+#
+# USAGE:
+#   Development:  docker compose -f ops/docker-compose.yml up -d
+#   Testnet:      docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml up -d
+#   Mainnet:      docker compose -f ops/docker-compose.yml -f ops/docker-compose.mainnet.yml up -d
+#
+# ARCHITECTURE:
+#   - PostgreSQL: Tournament state database
+#   - Redis: Celery message broker
+#   - Celery Worker: Evaluation task processor
+#   - Celery Beat: Tournament scheduler
+#   - Evaluation API: Read-only REST API
+#   - Validator: Bittensor validator neuron
+#   - Flower: Celery monitoring UI
+#
+# TOURNAMENT TIMING (configurable via environment variables):
+#   Development defaults: Manual mode, short cycles (2min submission, 3x3min epochs)
+#   Testnet: Daily mode, 12-hour cycles (1h submission, 3x3h epochs)
+#   Mainnet: Daily mode, 6-day cycles (24h submission, 5x24h epochs)
+# =============================================================================
+
 services:
 
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database
+  # ---------------------------------------------------------------------------
+  # Stores tournament state, submissions, evaluation results, and scoring data.
+  # Data persists in the infra-subnet-postgres-data volume.
+  #
+  # Schema Management:
+  #   - Migrations are handled by Alembic (see migrations service)
+  #   - Schema defined in evaluation/models/database.py
+  #
+  # Performance Considerations:
+  #   - Adjust shared_buffers and work_mem for production
+  #   - Regular vacuum and analyze recommended
+  #   - Monitor connection pool usage
+  # ---------------------------------------------------------------------------
   infra-subnet-postgres:
     container_name: infra-subnet-postgres
     image: postgres:16-alpine
@@ -13,11 +55,29 @@ services:
       - infra-subnet-postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vaidator}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-validator}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - default
 
+  # ---------------------------------------------------------------------------
+  # Redis Cache and Message Broker
+  # ---------------------------------------------------------------------------
+  # Serves as both:
+  #   1. Celery message broker for task queuing
+  #   2. Result backend for task state storage
+  #   3. Cache for frequently accessed data
+  #
+  # Data Persistence:
+  #   - Redis persists to infra-subnet-redis-data volume
+  #   - Uses RDB snapshots + AOF for durability
+  #
+  # Monitoring:
+  #   - Use redis-cli to inspect queues and state
+  #   - Monitor memory usage and eviction policy
+  # ---------------------------------------------------------------------------
   infra-subnet-redis:
     container_name: infra-subnet-redis
     image: redis:7-alpine
@@ -31,7 +91,34 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - default
 
+  # ---------------------------------------------------------------------------
+  # Celery Worker - Evaluation Task Processor
+  # ---------------------------------------------------------------------------
+  # Processes asynchronous evaluation tasks:
+  #   - Repository cloning and validation
+  #   - Docker image building
+  #   - Benchmark execution in isolated containers
+  #   - Result collection and scoring
+  #
+  # Task Types:
+  #   - evaluation_task: Execute single benchmark evaluation
+  #   - epoch_start_task: Initialize epoch evaluations
+  #   - epoch_orchestrator_task: Coordinate epoch progression
+  #   - epoch_end_task: Finalize epoch and calculate scores
+  #
+  # Resource Management:
+  #   - Concurrency controlled by WORKER_CONCURRENCY
+  #   - Each task can spawn Docker containers for isolation
+  #   - Memory and CPU limits applied to evaluation containers
+  #
+  # Security:
+  #   - Requires Docker socket access for container management
+  #   - Runs code scanning and validation before execution
+  #   - Enforces resource limits and timeouts
+  # ---------------------------------------------------------------------------
   infra-subnet-evaluation-worker:
     container_name: infra-subnet-evaluation-worker
     build:
@@ -44,17 +131,24 @@ services:
       -l info
       --concurrency=${WORKER_CONCURRENCY:-2}
     environment:
+      # Database Connection
       - POSTGRES_HOST=infra-subnet-postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB:-validator}
       - POSTGRES_USER=${POSTGRES_USER:-validator}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password1234}
+      # Redis/Celery Configuration
       - REDIS_URL=redis://infra-subnet-redis:6379/0
+      # Storage Paths
       - REPOS_PATH=/data/repos
       - DATA_PATH=/data/datasets
+      # Evaluation Resource Limits
       - BENCHMARK_MAX_EXECUTION_TIME=${BENCHMARK_MAX_EXECUTION_TIME:-3600}
       - BENCHMARK_MEMORY_LIMIT=${BENCHMARK_MEMORY_LIMIT:-16g}
+      - BENCHMARK_CPU_LIMIT=${BENCHMARK_CPU_LIMIT:-2}
+      # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Tournament Timing Configuration (Development defaults)
       - TOURNAMENT_SUBMISSION_DURATION_SECONDS=${TOURNAMENT_SUBMISSION_DURATION_SECONDS:-120}
       - TOURNAMENT_EPOCH_COUNT=${TOURNAMENT_EPOCH_COUNT:-3}
       - TOURNAMENT_EPOCH_DURATION_SECONDS=${TOURNAMENT_EPOCH_DURATION_SECONDS:-180}
@@ -70,7 +164,33 @@ services:
         condition: service_healthy
       infra-subnet-redis:
         condition: service_healthy
+    networks:
+      - default
 
+  # ---------------------------------------------------------------------------
+  # Celery Beat Scheduler
+  # ---------------------------------------------------------------------------
+  # Schedules periodic tasks based on tournament timing configuration:
+  #
+  # Manual Mode (TOURNAMENT_SCHEDULE_MODE=manual):
+  #   - No automatic scheduling
+  #   - Tournaments started via API or CLI
+  #
+  # Daily Mode (TOURNAMENT_SCHEDULE_MODE=daily):
+  #   - New tournament starts every 24 hours
+  #   - Submission phase begins immediately
+  #   - Epochs scheduled according to TOURNAMENT_EPOCH_* settings
+  #   - Multiple tournaments can run concurrently
+  #
+  # Scheduled Tasks:
+  #   - epoch_start_task: Triggered when submission phase ends
+  #   - epoch_orchestrator_task: Manages epoch transitions
+  #   - epoch_end_task: Finalizes completed epochs
+  #
+  # Beat Schedule:
+  #   - Persisted in /app/evaluation/tasks/beat_schedule.json
+  #   - Dynamically updated based on tournament state
+  # ---------------------------------------------------------------------------
   infra-subnet-evaluation-beat:
     container_name: infra-subnet-evaluation-beat
     build:
@@ -82,14 +202,18 @@ services:
       celery -A evaluation.tasks.celery_app beat
       -l info
     environment:
+      # Database Connection
       - POSTGRES_HOST=infra-subnet-postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB:-validator}
       - POSTGRES_USER=${POSTGRES_USER:-validator}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password1234}
+      # Redis/Celery Configuration
       - REDIS_URL=redis://infra-subnet-redis:6379/0
       - CELERY_BEAT_SCHEDULE_PATH=/app/evaluation/tasks/beat_schedule.json
+      # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Tournament Timing Configuration (Development defaults)
       - TOURNAMENT_SUBMISSION_DURATION_SECONDS=${TOURNAMENT_SUBMISSION_DURATION_SECONDS:-120}
       - TOURNAMENT_EPOCH_COUNT=${TOURNAMENT_EPOCH_COUNT:-3}
       - TOURNAMENT_EPOCH_DURATION_SECONDS=${TOURNAMENT_EPOCH_DURATION_SECONDS:-180}
@@ -103,7 +227,28 @@ services:
         condition: service_healthy
       infra-subnet-redis:
         condition: service_healthy
+    networks:
+      - default
 
+  # ---------------------------------------------------------------------------
+  # Database Migrations
+  # ---------------------------------------------------------------------------
+  # Manages database schema migrations using Alembic.
+  #
+  # Usage:
+  #   docker compose run --rm migrations          # Run pending migrations
+  #   docker compose run --rm migrations alembic current  # Show current version
+  #   docker compose run --rm migrations alembic history  # Show migration history
+  #
+  # Migration Files:
+  #   - Located in alembic/versions/
+  #   - Auto-generated from models in evaluation/models/database.py
+  #
+  # Best Practices:
+  #   - Always run migrations before starting services
+  #   - Test migrations on testnet before mainnet
+  #   - Backup database before applying migrations
+  # ---------------------------------------------------------------------------
   migrations:
     container_name: subnet-migrations
     build:
@@ -122,7 +267,35 @@ services:
       infra-subnet-postgres:
         condition: service_healthy
     restart: "no"
+    networks:
+      - default
 
+  # ---------------------------------------------------------------------------
+  # Evaluation API
+  # ---------------------------------------------------------------------------
+  # Read-only REST API providing tournament data and analytics.
+  #
+  # Endpoints:
+  #   GET /api/v1/tournaments              - List all tournaments
+  #   GET /api/v1/tournaments/{id}         - Tournament details
+  #   GET /api/v1/tournaments/{id}/submissions - Tournament submissions
+  #   GET /api/v1/tournaments/{id}/results - Leaderboard
+  #   GET /api/v1/tournaments/{id}/runs    - Evaluation runs
+  #   GET /api/v1/miners/{hotkey}/history  - Miner history
+  #   GET /api/v1/stats                    - Statistics
+  #   GET /health                          - Health check
+  #   GET /docs                            - OpenAPI documentation
+  #
+  # Purpose:
+  #   - Powers the web frontend dashboard
+  #   - Provides data for external integrations
+  #   - Read-only to prevent direct state modification
+  #
+  # Security:
+  #   - No authentication required (read-only data)
+  #   - Consider adding rate limiting for production
+  #   - Can be placed behind reverse proxy with HTTPS
+  # ---------------------------------------------------------------------------
   infra-subnet-evaluation-api:
     container_name: infra-subnet-evaluation-api
     build:
@@ -147,7 +320,37 @@ services:
     depends_on:
       infra-subnet-postgres:
         condition: service_healthy
+    networks:
+      - default
 
+  # ---------------------------------------------------------------------------
+  # Validator Node
+  # ---------------------------------------------------------------------------
+  # Bittensor validator neuron that:
+  #   - Connects to subtensor blockchain
+  #   - Manages tournament submissions from miners
+  #   - Updates miner weights based on evaluation scores
+  #   - Coordinates with evaluation system via database
+  #
+  # Network Configuration:
+  #   - SUBTENSOR_NETWORK: finney (mainnet), test (testnet), or ws://node:port (custom)
+  #   - Wallet credentials required for blockchain operations
+  #
+  # Tournament Integration:
+  #   - Monitors tournament state in database
+  #   - Accepts submissions during submission phase
+  #   - Sets weights after tournament completion
+  #
+  # Wallet Management:
+  #   - Wallet files mounted from BITTENSOR_VOLUME_PATH
+  #   - Requires registered hotkey on the subnet
+  #   - Sufficient TAO balance for weight setting
+  #
+  # Resource Requirements:
+  #   - Modest CPU/memory for validator logic
+  #   - Network bandwidth for blockchain sync
+  #   - Docker socket access for evaluation coordination
+  # ---------------------------------------------------------------------------
   infra-subnet-validator:
     container_name: infra-subnet-validator
     build:
@@ -162,15 +365,20 @@ services:
       --wallet.hotkey ${WALLET_HOTKEY:-default}
       --subtensor.network ${SUBTENSOR_NETWORK:-finney}
     environment:
+      # Database Connection
       - POSTGRES_HOST=infra-subnet-postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB:-validator}
       - POSTGRES_USER=${POSTGRES_USER:-validator}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password1234}
+      # Redis Configuration
       - REDIS_URL=redis://infra-subnet-redis:6379/0
+      # Storage Paths
       - REPOS_PATH=/data/repos
       - DATA_PATH=/data/datasets
+      # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Tournament Timing Configuration (Development defaults)
       - TOURNAMENT_SUBMISSION_DURATION_SECONDS=${TOURNAMENT_SUBMISSION_DURATION_SECONDS:-120}
       - TOURNAMENT_EPOCH_COUNT=${TOURNAMENT_EPOCH_COUNT:-3}
       - TOURNAMENT_EPOCH_DURATION_SECONDS=${TOURNAMENT_EPOCH_DURATION_SECONDS:-180}
@@ -191,6 +399,33 @@ services:
       infra-subnet-redis:
         condition: service_healthy
 
+  # ---------------------------------------------------------------------------
+  # Flower - Celery Monitoring UI
+  # ---------------------------------------------------------------------------
+  # Web-based monitoring interface for Celery workers and tasks.
+  #
+  # Features:
+  #   - Real-time worker status and resource usage
+  #   - Task history and execution timeline
+  #   - Queue depth monitoring
+  #   - Task success/failure statistics
+  #   - Worker control (restart, shutdown)
+  #
+  # Access:
+  #   http://localhost:5555
+  #   Username/Password configured via FLOWER_USER and FLOWER_PASSWORD
+  #
+  # Security:
+  #   - Enable basic auth in production
+  #   - Consider firewall rules or VPN access
+  #   - Monitor for unauthorized access attempts
+  #
+  # Use Cases:
+  #   - Debug stuck or failed tasks
+  #   - Monitor evaluation progress
+  #   - Identify performance bottlenecks
+  #   - Validate worker configuration
+  # ---------------------------------------------------------------------------
   infra-subnet-flower:
     container_name: infra-subnet-flower
     image: mher/flower:2.0
@@ -210,22 +445,172 @@ services:
     depends_on:
       infra-subnet-redis:
         condition: service_healthy
+    networks:
+      - default
 
+# =============================================================================
+# Networks
+# =============================================================================
 networks:
+  # Default network for internal service communication
+  default:
+    driver: bridge
+  
+  # Subnet network for validator and subtensor node communication
   subnet:
     name: subnet
     driver: bridge
 
+# =============================================================================
+# Volumes
+# =============================================================================
 volumes:
-  subtensor-data:
-    name: subtensor-data
-  subtensor-keystore:
-    name: subtensor-keystore
+  # PostgreSQL data persistence
   infra-subnet-postgres-data:
     name: infra-subnet-postgres-data
+  
+  # Redis data persistence
   infra-subnet-redis-data:
     name: infra-subnet-redis-data
+  
+  # Cloned miner repositories
   infra-subnet-repos:
     name: infra-subnet-repos
+  
+  # Evaluation datasets
   infra-subnet-datasets:
     name: infra-subnet-datasets
+  
+  # Subtensor blockchain data (used by testnet/mainnet/localnet configs)
+  subtensor-data:
+    name: subtensor-data
+  
+  # Subtensor keystore (used by testnet/mainnet/localnet configs)
+  subtensor-keystore:
+    name: subtensor-keystore
+
+# =============================================================================
+# DEPLOYMENT INSTRUCTIONS
+# =============================================================================
+#
+# DEVELOPMENT DEPLOYMENT
+# ----------------------
+# 1. Copy environment file:
+#    cp ops/.env.example ops/.env
+#
+# 2. Edit configuration:
+#    nano ops/.env
+#    # Set development values (short tournament cycles for testing)
+#
+# 3. Build the subnet image:
+#    docker compose -f ops/docker-compose.yml build
+#
+# 4. Start infrastructure:
+#    docker compose -f ops/docker-compose.yml up -d
+#
+# 5. Run database migrations:
+#    docker compose -f ops/docker-compose.yml run --rm migrations
+#
+# 6. Monitor services:
+#    docker compose -f ops/docker-compose.yml logs -f
+#
+# 7. Access monitoring:
+#    - Evaluation API: http://localhost:8001
+#    - Flower (Celery): http://localhost:5555
+#
+#
+# TESTNET DEPLOYMENT
+# ------------------
+# 1. Setup testnet environment:
+#    cp ops/.env.example ops/.env.testnet
+#    nano ops/.env.testnet
+#    # Configure for testnet (12-hour cycles, testnet credentials)
+#
+# 2. Build image:
+#    docker compose -f ops/docker-compose.yml build
+#
+# 3. Start testnet infrastructure (includes subtensor testnet-lite node):
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml up -d
+#
+# 4. Run migrations:
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml run --rm migrations
+#
+# 5. Monitor:
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml logs -f
+#
+#
+# MAINNET DEPLOYMENT
+# ------------------
+# 1. Setup mainnet environment:
+#    cp ops/.env.example ops/.env.mainnet
+#    nano ops/.env.mainnet
+#    # Configure for mainnet (6-day cycles, SECURE credentials)
+#    # IMPORTANT: Use strong passwords (32+ characters)
+#
+# 2. Verify Bittensor wallet:
+#    # Ensure wallet is registered and funded
+#    # Confirm correct NETUID for your subnet
+#
+# 3. Build image:
+#    docker compose -f ops/docker-compose.yml build
+#
+# 4. Start mainnet infrastructure (includes subtensor mainnet-lite node):
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.mainnet.yml up -d
+#
+# 5. Run migrations:
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.mainnet.yml run --rm migrations
+#
+# 6. Verify and monitor:
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.mainnet.yml ps
+#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.mainnet.yml logs -f
+#
+#
+# COMMON OPERATIONS
+# -----------------
+# Stop services (data persists):
+#   docker compose -f ops/docker-compose.yml down
+#
+# Stop and remove volumes (DESTRUCTIVE):
+#   docker compose -f ops/docker-compose.yml down -v
+#
+# Rebuild after code changes:
+#   docker compose -f ops/docker-compose.yml build --no-cache
+#
+# View logs for specific service:
+#   docker compose -f ops/docker-compose.yml logs -f infra-subnet-evaluation-worker
+#
+# =============================================================================
+# ENVIRONMENT VARIABLES REFERENCE
+# =============================================================================
+#
+# Database Configuration:
+#   POSTGRES_DB           - Database name (default: validator)
+#   POSTGRES_USER         - Database user (default: validator)
+#   POSTGRES_PASSWORD     - Database password (default: password1234)
+#
+# Bittensor Configuration:
+#   NETUID                - Subnet ID on Bittensor
+#   WALLET_NAME           - Validator wallet name
+#   WALLET_HOTKEY         - Validator hotkey name
+#   SUBTENSOR_NETWORK     - Network: finney, test, or ws://host:port
+#   BITTENSOR_VOLUME_PATH - Path to wallet directory (default: ~/.bittensor)
+#
+# Tournament Timing:
+#   TOURNAMENT_SCHEDULE_MODE                  - manual or daily
+#   TOURNAMENT_SUBMISSION_DURATION_SECONDS    - Submission phase duration
+#   TOURNAMENT_EPOCH_COUNT                    - Number of evaluation epochs
+#   TOURNAMENT_EPOCH_DURATION_SECONDS         - Duration of each epoch
+#   TOURNAMENT_NETWORKS                       - Comma-separated: torus,bittensor,ethereum
+#
+# Evaluation Resources:
+#   BENCHMARK_MAX_EXECUTION_TIME  - Max seconds per evaluation (default: 3600)
+#   BENCHMARK_MEMORY_LIMIT        - Memory limit per container (default: 16g)
+#   BENCHMARK_CPU_LIMIT           - CPU limit per container (default: 2)
+#   WORKER_CONCURRENCY            - Celery worker concurrency (default: 2)
+#
+# Monitoring:
+#   FLOWER_USER          - Flower UI username (default: admin)
+#   FLOWER_PASSWORD      - Flower UI password (default: admin)
+#   LOG_LEVEL            - Logging level: DEBUG, INFO, WARNING, ERROR
+#
+# =============================================================================

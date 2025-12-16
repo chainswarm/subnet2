@@ -1,231 +1,136 @@
 # =============================================================================
-# Docker Compose Configuration for TESTNET Deployment
+# Docker Compose Configuration for TESTNET Subtensor Node
 # =============================================================================
-# This file extends the base docker-compose.yml with testnet-specific settings.
+# This file contains ONLY the Bittensor testnet-lite subtensor node.
+# It is meant to be run SEPARATELY from the application services.
 #
 # USAGE:
-#   docker compose -f docker-compose.yml -f docker-compose.testnet.yml up -d
+#   1. Start the testnet subtensor node:
+#      docker compose -f ops/docker-compose.testnet.yml up -d
+#
+#   2. Configure application to connect to it in .env:
+#      SUBTENSOR_NETWORK=ws://testnet-lite:9944
+#
+#   3. Start application services separately:
+#      docker compose -f ops/docker-compose.yml up -d
 #
 # NETWORK: test (Bittensor testnet)
-# TOURNAMENT TIMING: 12-hour cycles (production-like but accelerated)
-#   - Submission phase: 1 hour
-#   - Epoch count: 3 epochs  
-#   - Epoch duration: 3 hours per epoch
-#   - Total tournament time: 1h + (3 × 3h) = 10 hours
-#   - Schedule: Daily automated tournaments
 #
 # PURPOSE:
-#   Production-like environment for testing with shorter tournament cycles.
-#   Suitable for validating tournament logic, submission handling, and
-#   evaluation workflows before mainnet deployment.
+#   Provides a local Bittensor testnet node for development and testing.
+#   The validator will connect to this node instead of remote endpoints.
 # =============================================================================
+
+volumes:
+  # Subtensor testnet blockchain data
+  testnet-lite-volume:
+    name: testnet-lite-volume
 
 services:
 
-  # ---------------------------------------------------------------------------
-  # PostgreSQL Database - Testnet Configuration
-  # ---------------------------------------------------------------------------
-  infra-subnet-postgres:
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 4G
-        reservations:
-          cpus: '1'
-          memory: 2G
+  # ===========================================================================
+  # SUBTENSOR TESTNET-LITE NODE
+  # ===========================================================================
+  # Lightweight Bittensor testnet node that syncs with the test network.
+  # Uses warp sync for fast initial synchronization.
+  #
+  # Connection:
+  #   - RPC Endpoint: ws://localhost:9944 (from host)
+  #   - RPC Endpoint: ws://testnet-lite:9944 (from Docker network)
+  #   - Syncs with: bootnode.test.finney.opentensor.ai
+  #
+  # Storage:
+  #   - Blockchain data: /data (testnet-lite-volume)
+  #   - Mode: Lite (not archive) - only recent state
+  #
+  # Performance:
+  #   - ParityDB for efficient storage
+  #   - 4GB DB cache, 2GB trie cache
+  #   - Warp sync for fast initial sync (30-60 minutes)
+  # ===========================================================================
 
-  # ---------------------------------------------------------------------------
-  # Redis Cache - Testnet Configuration
-  # ---------------------------------------------------------------------------
-  infra-subnet-redis:
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-
-  # ---------------------------------------------------------------------------
-  # Celery Worker - Testnet Configuration
-  # ---------------------------------------------------------------------------
-  # Processes evaluation tasks with testnet timing parameters
-  infra-subnet-evaluation-worker:
+  testnet-lite:
+    image: ghcr.io/opentensor/subtensor:latest
+    container_name: subtensor-testnet-lite
+    cpu_count: 4
+    mem_limit: 40000000000
+    memswap_limit: 80000000000
+    ports:
+      - "9944:9944"
+      - "30333:30333"
+      - "9933:9933"
+    volumes:
+      - testnet-lite-volume:/data
+      - ./chainspecs:/chainspecs
+    command:
+      - --base-path=/data
+      - --chain=/chainspecs/raw_spec_testfinney.json
+      - --rpc-external
+      - --rpc-cors=all
+      - --no-mdns
+      - --bootnodes=/dns/bootnode.test.finney.opentensor.ai/tcp/30333/p2p/12D3KooWPM4mLcKJGtyVtkggqdG84zWrd7Rij6PGQDoijh1X86Vr
+      - --sync=warp
+      - --database=paritydb
+      - --db-cache=4096
+      - --trie-cache-size=2048
     environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
-      # Testnet Tournament Timing (12-hour cycle)
-      - TOURNAMENT_SCHEDULE_MODE=daily
-      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=3600       # 1 hour
-      - TOURNAMENT_EPOCH_COUNT=3
-      - TOURNAMENT_EPOCH_DURATION_SECONDS=10800           # 3 hours
-      - TOURNAMENT_NETWORKS=torus,bittensor
-      # Evaluation Resource Limits (moderate for testing)
-      - BENCHMARK_MAX_EXECUTION_TIME=${BENCHMARK_MAX_EXECUTION_TIME:-3600}
-      - BENCHMARK_MEMORY_LIMIT=${BENCHMARK_MEMORY_LIMIT:-8g}
-      - BENCHMARK_CPU_LIMIT=${BENCHMARK_CPU_LIMIT:-2}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    deploy:
-      resources:
-        limits:
-          cpus: '4'
-          memory: 12G
-        reservations:
-          cpus: '2'
-          memory: 8G
+      - CARGO_HOME=/var/www/node-subtensor/.cargo
     restart: always
+    networks:
+      - subnet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
-  # ---------------------------------------------------------------------------
-  # Celery Beat Scheduler - Testnet Configuration
-  # ---------------------------------------------------------------------------
-  # Manages automated daily tournament scheduling for testnet
-  infra-subnet-evaluation-beat:
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
-      # Testnet Tournament Timing (12-hour cycle)
-      - TOURNAMENT_SCHEDULE_MODE=daily
-      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=3600       # 1 hour
-      - TOURNAMENT_EPOCH_COUNT=3
-      - TOURNAMENT_EPOCH_DURATION_SECONDS=10800           # 3 hours
-      - TOURNAMENT_NETWORKS=torus,bittensor
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-    restart: always
-
-  # ---------------------------------------------------------------------------
-  # Database Migrations - Testnet Configuration
-  # ---------------------------------------------------------------------------
-  migrations:
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
-
-  # ---------------------------------------------------------------------------
-  # Evaluation API - Testnet Configuration
-  # ---------------------------------------------------------------------------
-  infra-subnet-evaluation-api:
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '1'
-          memory: 1G
-    restart: always
-
-  # ---------------------------------------------------------------------------
-  # Validator Node - Testnet Configuration
-  # ---------------------------------------------------------------------------
-  # Connects to Bittensor testnet and manages tournament submissions
-  infra-subnet-validator:
-    command: >
-      python neurons/validator.py
-      --netuid ${NETUID:-2}
-      --wallet.name ${WALLET_NAME:-validator_testnet}
-      --wallet.hotkey ${WALLET_HOTKEY:-default}
-      --subtensor.network test
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_testnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_testnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-testnet_secure_password}
-      # Testnet Tournament Timing (12-hour cycle)
-      - TOURNAMENT_SCHEDULE_MODE=daily
-      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=3600       # 1 hour
-      - TOURNAMENT_EPOCH_COUNT=3
-      - TOURNAMENT_EPOCH_DURATION_SECONDS=10800           # 3 hours
-      - TOURNAMENT_NETWORKS=torus,bittensor
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 4G
-        reservations:
-          cpus: '1'
-          memory: 2G
-    restart: always
-
-  # ---------------------------------------------------------------------------
-  # Flower Monitoring - Testnet Configuration
-  # ---------------------------------------------------------------------------
-  infra-subnet-flower:
-    environment:
-      - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-testnet_flower_password}
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-    restart: always
+networks:
+  subnet:
+    name: subnet
+    driver: bridge
 
 # =============================================================================
 # DEPLOYMENT INSTRUCTIONS
 # =============================================================================
 # 
-# 1. Setup environment variables:
-#    cp ops/.env.example ops/.env.testnet
-#    # Edit .env.testnet with testnet-specific values
+# 1. Start the testnet subtensor node:
+#    docker compose -f ops/docker-compose.testnet.yml up -d
 #
-# 2. Build the subnet image:
-#    docker compose -f ops/docker-compose.yml build
+# 2. Wait for node to sync (30-60 minutes):
+#    docker compose -f ops/docker-compose.testnet.yml logs -f testnet-lite
+#    # Look for "Syncing" messages and block imports
 #
-# 3. Start testnet infrastructure:
-#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml up -d
+# 3. Configure your .env file to connect to this node:
+#    SUBTENSOR_NETWORK=ws://testnet-lite:9944
 #
-# 4. Run database migrations:
-#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml run migrations
+# 4. Start application services (in separate terminal/command):
+#    docker compose -f ops/docker-compose.yml up -d
 #
-# 5. Monitor services:
-#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml logs -f
+# 5. Check node status anytime:
+#    docker compose -f ops/docker-compose.testnet.yml ps
+#    docker compose -f ops/docker-compose.testnet.yml logs testnet-lite
 #
-# 6. Access monitoring interfaces:
-#    - Evaluation API: http://localhost:8001
-#    - Flower (Celery): http://localhost:5555
-#
-# 7. Stop services:
-#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.testnet.yml down
+# 6. Stop the node:
+#    docker compose -f ops/docker-compose.testnet.yml down
 #
 # =============================================================================
-# TESTNET TOURNAMENT SCHEDULE
+# TROUBLESHOOTING
 # =============================================================================
 #
-# With daily automated tournaments (TOURNAMENT_SCHEDULE_MODE=daily):
-# - New tournament starts every 24 hours
-# - Each tournament runs for ~10 hours (1h submission + 9h evaluation)
-# - Provides 14 hours of idle time between tournaments
-# - Allows multiple tournament iterations per day for testing
+# Node won't sync:
+#   - Check network connectivity to bootnode.test.finney.opentensor.ai
+#   - Verify port 30333 is not blocked by firewall
+#   - Monitor logs for sync progress
+#   - Initial sync can take 30-60 minutes
 #
-# Timeline for a single tournament:
-#   Hour 0:     Tournament starts, submission phase begins
-#   Hour 1:     Submissions close, epoch 1 begins
-#   Hour 4:     Epoch 1 ends, epoch 2 begins
-#   Hour 7:     Epoch 2 ends, epoch 3 begins
-#   Hour 10:    Epoch 3 ends, tournament completes
+# Can't connect from validator:
+#   - Ensure both services are on the 'subnet' network
+#   - Verify testnet-lite service is healthy
+#   - Check SUBTENSOR_NETWORK in .env is correct
+#
+# Port conflicts on WSL:
+#   - If ports are in use, stop other services or change ports
+#   - Check: netstat -an | grep 9944
 #
 # =============================================================================

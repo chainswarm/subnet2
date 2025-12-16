@@ -1,345 +1,187 @@
 # =============================================================================
-# Docker Compose Configuration for MAINNET (FINNEY) Deployment
+# Docker Compose Configuration for MAINNET Subtensor Node
 # =============================================================================
-# This file extends the base docker-compose.yml with mainnet-specific settings.
+# This file contains ONLY the Bittensor mainnet-lite subtensor node.
+# It is meant to be run SEPARATELY from the application services.
 #
 # USAGE:
-#   docker compose -f docker-compose.yml -f docker-compose.mainnet.yml up -d
+#   1. Start the mainnet subtensor node:
+#      docker compose -f ops/docker-compose.mainnet.yml up -d
+#
+#   2. Configure application to connect to it in .env:
+#      SUBTENSOR_NETWORK=ws://mainnet-lite:9944
+#
+#   3. Start application services separately:
+#      docker compose -f ops/docker-compose.yml up -d
 #
 # NETWORK: finney (Bittensor mainnet/production)
-# TOURNAMENT TIMING: 6-day cycles (full production)
-#   - Submission phase: 24 hours (1 day)
-#   - Epoch count: 5 epochs
-#   - Epoch duration: 24 hours per epoch (1 day)
-#   - Total tournament time: 1d + (5 × 1d) = 6 days
-#   - Schedule: Daily automated tournaments
 #
 # PURPOSE:
-#   Full production deployment on Bittensor mainnet (finney).
-#   Optimized for maximum stability, security, and tournament integrity.
+#   Provides a local Bittensor mainnet node for production deployment.
+#   The validator will connect to this node instead of remote endpoints.
+#
+# WARNING: This is a PRODUCTION node. Initial sync takes 2-4 hours.
 # =============================================================================
+
+volumes:
+  # Subtensor mainnet blockchain data
+  mainnet-lite-volume:
+    name: mainnet-lite-volume
 
 services:
 
-  # ---------------------------------------------------------------------------
-  # PostgreSQL Database - Mainnet Configuration
-  # ---------------------------------------------------------------------------
-  infra-subnet-postgres:
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_mainnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_mainnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}  # REQUIRED: Must be set in .env
-    deploy:
-      resources:
-        limits:
-          cpus: '4'
-          memory: 8G
-        reservations:
-          cpus: '2'
-          memory: 4G
-    restart: always
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "5"
+  # ===========================================================================
+  # SUBTENSOR MAINNET-LITE NODE
+  # ===========================================================================
+  # Lightweight Bittensor mainnet node that syncs with the finney network.
+  # Uses warp sync for fast initial synchronization.
+  #
+  # Connection:
+  #   - RPC Endpoint: ws://localhost:9944 (from host)
+  #   - RPC Endpoint: ws://mainnet-lite:9944 (from Docker network)
+  #   - Syncs with: bootnode.finney.chain.opentensor.ai
+  #
+  # Storage:
+  #   - Blockchain data: /data (mainnet-lite-volume)
+  #   - Mode: Lite (not archive) - only recent state
+  #
+  # Performance:
+  #   - ParityDB for efficient storage
+  #   - 4GB DB cache, 2GB trie cache
+  #   - Warp sync for fast initial sync (2-4 hours)
+  #
+  # IMPORTANT: Initial sync can take 2-4 hours. Monitor logs for progress.
+  # ===========================================================================
 
-  # ---------------------------------------------------------------------------
-  # Redis Cache - Mainnet Configuration
-  # ---------------------------------------------------------------------------
-  infra-subnet-redis:
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '1'
-          memory: 1G
-    restart: always
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "5"
-
-  # ---------------------------------------------------------------------------
-  # Celery Worker - Mainnet Configuration
-  # ---------------------------------------------------------------------------
-  # Processes evaluation tasks with production timing parameters
-  infra-subnet-evaluation-worker:
-    command: >
-      celery -A evaluation.tasks.celery_app worker
-      -l info
-      --concurrency=${WORKER_CONCURRENCY:-4}
-      --max-tasks-per-child=100
-      --time-limit=7200
-      --soft-time-limit=6900
+  mainnet-lite:
+    image: ghcr.io/opentensor/subtensor:latest
+    container_name: subtensor-mainnet-lite
+    cpu_count: 4
+    mem_limit: 40000000000
+    memswap_limit: 80000000000
+    ports:
+      - "9944:9944"
+      - "30333:30333"
+      - "9933:9933"
+    volumes:
+      - mainnet-lite-volume:/data
+      - ./chainspecs:/chainspecs
+    command:
+      - --base-path=/data
+      - --chain=/chainspecs/raw_spec_finney.json
+      - --rpc-external
+      - --rpc-cors=all
+      - --no-mdns
+      - --bootnodes=/dns/bootnode.finney.chain.opentensor.ai/tcp/30333/ws/p2p/12D3KooWRwbMb85RWnT8DSXSYMWQtuDwh4LJzndoRrTDotTR5gDC
+      - --sync=warp
+      - --database=paritydb
+      - --db-cache=4096
+      - --trie-cache-size=2048
     environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_mainnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_mainnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}  # REQUIRED
-      # Mainnet Tournament Timing (6-day cycle)
-      - TOURNAMENT_SCHEDULE_MODE=daily
-      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=86400      # 24 hours
-      - TOURNAMENT_EPOCH_COUNT=5
-      - TOURNAMENT_EPOCH_DURATION_SECONDS=86400           # 24 hours
-      - TOURNAMENT_NETWORKS=torus,bittensor,ethereum
-      # Production Evaluation Resource Limits
-      - BENCHMARK_MAX_EXECUTION_TIME=${BENCHMARK_MAX_EXECUTION_TIME:-7200}
-      - BENCHMARK_MEMORY_LIMIT=${BENCHMARK_MEMORY_LIMIT:-16g}
-      - BENCHMARK_CPU_LIMIT=${BENCHMARK_CPU_LIMIT:-4}
-      - LOG_LEVEL=${LOG_LEVEL:-WARNING}
-    deploy:
-      resources:
-        limits:
-          cpus: '8'
-          memory: 24G
-        reservations:
-          cpus: '4'
-          memory: 16G
+      - CARGO_HOME=/var/www/node-subtensor/.cargo
     restart: always
+    networks:
+      - subnet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     logging:
       driver: "json-file"
       options:
         max-size: "50m"
         max-file: "10"
 
-  # ---------------------------------------------------------------------------
-  # Celery Beat Scheduler - Mainnet Configuration
-  # ---------------------------------------------------------------------------
-  # Manages automated daily tournament scheduling for mainnet
-  infra-subnet-evaluation-beat:
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_mainnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_mainnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}  # REQUIRED
-      # Mainnet Tournament Timing (6-day cycle)
-      - TOURNAMENT_SCHEDULE_MODE=daily
-      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=86400      # 24 hours
-      - TOURNAMENT_EPOCH_COUNT=5
-      - TOURNAMENT_EPOCH_DURATION_SECONDS=86400           # 24 hours
-      - TOURNAMENT_NETWORKS=torus,bittensor,ethereum
-      - LOG_LEVEL=${LOG_LEVEL:-WARNING}
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-    restart: always
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "5"
-
-  # ---------------------------------------------------------------------------
-  # Database Migrations - Mainnet Configuration
-  # ---------------------------------------------------------------------------
-  migrations:
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_mainnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_mainnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}  # REQUIRED
-
-  # ---------------------------------------------------------------------------
-  # Evaluation API - Mainnet Configuration
-  # ---------------------------------------------------------------------------
-  infra-subnet-evaluation-api:
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_mainnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_mainnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}  # REQUIRED
-      - LOG_LEVEL=${LOG_LEVEL:-WARNING}
-    deploy:
-      resources:
-        limits:
-          cpus: '4'
-          memory: 4G
-        reservations:
-          cpus: '2'
-          memory: 2G
-    restart: always
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "20m"
-        max-file: "10"
-
-  # ---------------------------------------------------------------------------
-  # Validator Node - Mainnet Configuration
-  # ---------------------------------------------------------------------------
-  # Connects to Bittensor mainnet (finney) and manages tournament submissions
-  infra-subnet-validator:
-    command: >
-      python neurons/validator.py
-      --netuid ${NETUID}
-      --wallet.name ${WALLET_NAME}
-      --wallet.hotkey ${WALLET_HOTKEY}
-      --subtensor.network finney
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-validator_mainnet}
-      - POSTGRES_USER=${POSTGRES_USER:-validator_mainnet}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}  # REQUIRED
-      # Mainnet Tournament Timing (6-day cycle)
-      - TOURNAMENT_SCHEDULE_MODE=daily
-      - TOURNAMENT_SUBMISSION_DURATION_SECONDS=86400      # 24 hours
-      - TOURNAMENT_EPOCH_COUNT=5
-      - TOURNAMENT_EPOCH_DURATION_SECONDS=86400           # 24 hours
-      - TOURNAMENT_NETWORKS=torus,bittensor,ethereum
-      - LOG_LEVEL=${LOG_LEVEL:-WARNING}
-    deploy:
-      resources:
-        limits:
-          cpus: '4'
-          memory: 8G
-        reservations:
-          cpus: '2'
-          memory: 4G
-    restart: always
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "10"
-
-  # ---------------------------------------------------------------------------
-  # Flower Monitoring - Mainnet Configuration
-  # ---------------------------------------------------------------------------
-  infra-subnet-flower:
-    environment:
-      - FLOWER_BASIC_AUTH=${FLOWER_USER}:${FLOWER_PASSWORD}  # REQUIRED
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-    restart: always
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "5"
+networks:
+  subnet:
+    name: subnet
+    driver: bridge
 
 # =============================================================================
 # DEPLOYMENT INSTRUCTIONS
 # =============================================================================
 # 
-# CRITICAL: This is a production mainnet deployment. Ensure all security
-# measures are in place before deployment.
+# CRITICAL: This is a production mainnet node. Ensure sufficient resources.
 #
-# 1. Setup secure environment variables:
-#    cp ops/.env.example ops/.env.mainnet
-#    # Edit .env.mainnet with PRODUCTION values:
-#    #   - Strong database passwords (32+ characters)
-#    #   - Secure Flower credentials
-#    #   - Correct wallet names and hotkeys
-#    #   - Appropriate NETUID for your subnet
+# 1. Start the mainnet subtensor node:
+#    docker compose -f ops/docker-compose.mainnet.yml up -d
 #
-# 2. Verify Bittensor wallet configuration:
-#    # Ensure your validator wallet is properly configured
-#    # Verify wallet has sufficient TAO for operations
-#    # Confirm wallet hotkey is registered on the subnet
+# 2. Wait for node to sync (2-4 hours) - IMPORTANT!:
+#    docker compose -f ops/docker-compose.mainnet.yml logs -f mainnet-lite
+#    # Look for "Syncing" messages and block imports
+#    # Wait until sync is complete before starting validator
 #
-# 3. Build the subnet image:
-#    docker compose -f ops/docker-compose.yml build
+# 3. Configure your .env file to connect to this node:
+#    SUBTENSOR_NETWORK=ws://mainnet-lite:9944
 #
-# 4. Start mainnet infrastructure:
-#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.mainnet.yml up -d
+# 4. Start application services (AFTER node is synced):
+#    docker compose -f ops/docker-compose.yml up -d
 #
-# 5. Run database migrations:
-#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.mainnet.yml run migrations
+# 5. Monitor node status:
+#    docker compose -f ops/docker-compose.mainnet.yml ps
+#    docker compose -f ops/docker-compose.mainnet.yml logs mainnet-lite
 #
-# 6. Verify all services are healthy:
-#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.mainnet.yml ps
-#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.mainnet.yml logs
-#
-# 7. Monitor services continuously:
-#    docker compose -f ops/docker-compose.yml -f ops/docker-compose.mainnet.yml logs -f
-#
-# 8. Access monitoring interfaces:
-#    - Evaluation API: http://localhost:8001
-#    - Flower (Celery): http://localhost:5555 (credentials required)
-#
-# 9. Setup continuous monitoring:
-#    # Configure external monitoring for:
-#    #   - Service health checks
-#    #   - Disk space usage
-#    #   - Memory and CPU usage
-#    #   - Network connectivity
-#    #   - Database performance
-#
-# 10. Backup strategy:
-#     # Implement regular backups for:
-#     #   - PostgreSQL database (tournament data, submissions, scores)
-#     #   - Bittensor wallet keys
-#     #   - Docker volumes (repos, datasets)
+# 6. Stop the node:
+#    docker compose -f ops/docker-compose.mainnet.yml down
 #
 # =============================================================================
-# MAINNET TOURNAMENT SCHEDULE
+# RESOURCE REQUIREMENTS
 # =============================================================================
 #
-# With daily automated tournaments (TOURNAMENT_SCHEDULE_MODE=daily):
-# - New tournament starts every 24 hours
-# - Each tournament runs for 6 days (144 hours)
-# - Multiple tournaments run concurrently (overlapping)
-# - Provides continuous evaluation and scoring
+# Minimum System Requirements:
+#   - CPU: 4 cores
+#   - RAM: 40GB available
+#   - Disk: 100GB+ free space (blockchain data grows)
+#   - Network: Stable internet connection, port 30333 open
 #
-# Timeline for a single tournament:
-#   Day 0 (Hour 0):      Tournament starts, submission phase begins
-#   Day 1 (Hour 24):     Submissions close, epoch 1 begins
-#   Day 2 (Hour 48):     Epoch 1 ends, epoch 2 begins
-#   Day 3 (Hour 72):     Epoch 2 ends, epoch 3 begins
-#   Day 4 (Hour 96):     Epoch 3 ends, epoch 4 begins
-#   Day 5 (Hour 120):    Epoch 4 ends, epoch 5 begins
-#   Day 6 (Hour 144):    Epoch 5 ends, tournament completes
-#
-# Concurrent tournament example:
-#   - Tournament A: Days 1-6 (started Monday)
-#   - Tournament B: Days 2-7 (started Tuesday)
-#   - Tournament C: Days 3-8 (started Wednesday)
-#   - ... and so on
-#
-# This ensures miners are continuously evaluated and validators maintain
-# up-to-date performance scores for the network.
+# Monitor disk usage regularly:
+#   du -sh /var/lib/docker/volumes/mainnet-lite-volume
 #
 # =============================================================================
 # SECURITY CONSIDERATIONS
 # =============================================================================
 #
 # 1. Network Security:
-#    - Use firewall rules to restrict access to services
-#    - Only expose necessary ports (8001, 5555)
-#    - Consider VPN or SSH tunneling for Flower access
+#    - Port 30333 must be accessible for P2P sync
+#    - Port 9944 should only be accessible to trusted services
+#    - Consider firewall rules to restrict RPC access
 #
-# 2. Secrets Management:
-#    - Never commit .env.mainnet to version control
-#    - Use strong, unique passwords for all services
-#    - Rotate credentials regularly
-#    - Consider using Docker secrets for sensitive data
+# 2. Resource Monitoring:
+#    - Set up alerts for disk space (blockchain data grows)
+#    - Monitor memory usage
+#    - Track CPU utilization
 #
-# 3. Resource Monitoring:
-#    - Set up alerts for resource exhaustion
-#    - Monitor disk space (PostgreSQL, Docker volumes)
-#    - Track memory usage and swap
-#    - Monitor network bandwidth
+# 3. Backup Strategy:
+#    - Blockchain data can be re-synced (no backup needed)
+#    - Focus backup efforts on application data
 #
-# 4. Disaster Recovery:
-#    - Test backup restoration procedures
-#    - Document recovery steps
-#    - Keep offline backups of wallet keys
-#    - Maintain secondary validator infrastructure
+# =============================================================================
+# TROUBLESHOOTING
+# =============================================================================
 #
-# 5. Updates and Maintenance:
-#    - Schedule regular maintenance windows
-#    - Test updates on testnet first
-#    - Keep Docker images updated
-#    - Monitor security advisories
+# Node won't sync:
+#   - Check network connectivity to bootnode.finney.chain.opentensor.ai
+#   - Verify port 30333 is not blocked by firewall
+#   - Monitor logs for sync progress
+#   - Initial sync can take 2-4 hours (be patient)
+#   - Check disk space (blockchain data can be large)
+#
+# Can't connect from validator:
+#   - Ensure both services are on the 'subnet' network
+#   - Verify mainnet-lite service is healthy
+#   - Ensure subtensor sync is complete
+#   - Check SUBTENSOR_NETWORK in .env is correct
+#
+# Performance issues:
+#   - Verify system meets minimum requirements
+#   - Check disk I/O performance
+#   - Monitor memory usage
+#   - Consider increasing cache sizes if RAM available
+#
+# Port conflicts on WSL:
+#   - If ports are in use, stop other services or change ports
+#   - Check: netstat -an | grep 9944
 #
 # =============================================================================

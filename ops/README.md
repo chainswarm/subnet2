@@ -2,26 +2,36 @@
 
 Docker Compose setup for subnet2 evaluation infrastructure.
 
+## Architecture Overview
+
+The Docker Compose setup is organized into SEPARATE components that can be run independently:
+
+- **[`docker-compose.yml`](docker-compose.yml)**: ALL application services (PostgreSQL, Redis, Celery, Validator, API, Flower, Migrations)
+- **[`docker-compose.testnet.yml`](docker-compose.testnet.yml)**: ONLY Bittensor testnet-lite subtensor node
+- **[`docker-compose.mainnet.yml`](docker-compose.mainnet.yml)**: ONLY Bittensor mainnet-lite subtensor node
+- **[`docker-compose.localnet.yml`](docker-compose.localnet.yml)**: ONLY local development subtensor node
+
+**Key Principle**: Subtensor nodes run SEPARATELY from application services. Configure connection via `.env` file.
+
 ## Deployment Environments
 
-This project provides three Docker Compose configurations for different deployment scenarios:
-
-### 1. Development (Base Configuration)
-- **File**: [`docker-compose.yml`](docker-compose.yml)
-- **Network**: Configurable (default: finney)
+### 1. Development (Local)
+- **Application**: [`docker-compose.yml`](docker-compose.yml)
+- **Subtensor Node**: Optional - can use remote endpoints or local node
+- **Network**: Configurable via `SUBTENSOR_NETWORK` in `.env` (default: finney remote)
 - **Tournament Schedule**: Manual mode (short cycles for testing)
 - **Purpose**: Local development and testing
 
 ### 2. Testnet Deployment
-- **File**: [`docker-compose.testnet.yml`](docker-compose.testnet.yml)
-- **Network**: `test` (Bittensor testnet)
-- **Tournament Schedule**: Daily automated (12-hour cycles)
+- **Application**: [`docker-compose.yml`](docker-compose.yml) with testnet `.env` config
+- **Subtensor Node**: [`docker-compose.testnet.yml`](docker-compose.testnet.yml) (run separately)
+- **Connection**: `SUBTENSOR_NETWORK=ws://testnet-lite:9944` in `.env`
 - **Purpose**: Production-like testing with accelerated tournament cycles
 
 ### 3. Mainnet Deployment
-- **File**: [`docker-compose.mainnet.yml`](docker-compose.mainnet.yml)
-- **Network**: `finney` (Bittensor mainnet)
-- **Tournament Schedule**: Daily automated (6-day cycles)
+- **Application**: [`docker-compose.yml`](docker-compose.yml) with mainnet `.env` config
+- **Subtensor Node**: [`docker-compose.mainnet.yml`](docker-compose.mainnet.yml) (run separately)
+- **Connection**: `SUBTENSOR_NETWORK=ws://mainnet-lite:9944` in `.env`
 - **Purpose**: Full production deployment
 
 ## Quick Start
@@ -50,22 +60,40 @@ docker compose logs -f
 
 ### Testnet Deployment
 
+**IMPORTANT**: Subtensor node and application services run SEPARATELY.
+
 ```bash
-# Copy and configure testnet environment
-cp .env.example .env.testnet
-nano .env.testnet  # Configure for testnet
+# Step 1: Start the testnet subtensor node (separate terminal/session)
+docker compose -f ops/docker-compose.testnet.yml up -d
 
-# Build the Docker image
-docker compose -f docker-compose.yml build
+# Wait for node to sync (30-60 minutes)
+docker compose -f ops/docker-compose.testnet.yml logs -f testnet-lite
 
-# Start testnet infrastructure
-docker compose -f docker-compose.yml -f docker-compose.testnet.yml up -d
+# Step 2: Configure application environment
+cp ops/.env.example ops/.env.testnet
+nano ops/.env.testnet
+# Set: SUBTENSOR_NETWORK=ws://testnet-lite:9944
+# Set: POSTGRES_DB=validator_testnet
+# Set: POSTGRES_USER=validator_testnet
+# Set: POSTGRES_PASSWORD=<strong-password>
+# Set: TOURNAMENT_SCHEDULE_MODE=daily
+# Set: TOURNAMENT_SUBMISSION_DURATION_SECONDS=3600        # 1 hour
+# Set: TOURNAMENT_EPOCH_COUNT=3
+# Set: TOURNAMENT_EPOCH_DURATION_SECONDS=10800             # 3 hours
+# Set: TOURNAMENT_NETWORKS=torus,bittensor
 
-# Run migrations
-docker compose -f docker-compose.yml -f docker-compose.testnet.yml run --rm migrations
+# Step 3: Build application Docker image
+docker compose -f ops/docker-compose.yml build
 
-# View logs
-docker compose -f docker-compose.yml -f docker-compose.testnet.yml logs -f
+# Step 4: Start application services (separate from subtensor)
+docker compose -f ops/docker-compose.yml --env-file ops/.env.testnet up -d
+
+# Step 5: Run migrations
+docker compose -f ops/docker-compose.yml --env-file ops/.env.testnet run --rm migrations
+
+# Step 6: Monitor both separately
+docker compose -f ops/docker-compose.testnet.yml logs -f testnet-lite
+docker compose -f ops/docker-compose.yml logs -f
 ```
 
 **Testnet Tournament Timing** (12-hour cycle):
@@ -74,24 +102,54 @@ docker compose -f docker-compose.yml -f docker-compose.testnet.yml logs -f
 - Total tournament time: ~10 hours
 - Daily automated tournaments
 
+**Subtensor Node** (runs separately):
+- File: `docker-compose.testnet.yml`
+- Service: `testnet-lite`
+- Endpoint: `ws://testnet-lite:9944`
+- Sync time: 30-60 minutes
+
 ### Mainnet Deployment
 
+**CRITICAL**: Subtensor node and application services run SEPARATELY. Use STRONG passwords for production!
+
 ```bash
-# Copy and configure mainnet environment
-cp .env.example .env.mainnet
-nano .env.mainnet  # Configure for mainnet with SECURE credentials
+# Step 1: Start the mainnet subtensor node (separate terminal/session)
+docker compose -f ops/docker-compose.mainnet.yml up -d
 
-# Build the Docker image
-docker compose -f docker-compose.yml build
+# Wait for node to sync (2-4 hours) - MUST COMPLETE BEFORE STARTING VALIDATOR!
+docker compose -f ops/docker-compose.mainnet.yml logs -f mainnet-lite
 
-# Start mainnet infrastructure
-docker compose -f docker-compose.yml -f docker-compose.mainnet.yml up -d
+# Step 2: Configure application environment (SECURE passwords!)
+cp ops/.env.example ops/.env.mainnet
+nano ops/.env.mainnet
+# Set: SUBTENSOR_NETWORK=ws://mainnet-lite:9944
+# Set: POSTGRES_DB=validator_mainnet
+# Set: POSTGRES_USER=validator_mainnet
+# Set: POSTGRES_PASSWORD=<STRONG-32-char-random-password>
+# Set: FLOWER_USER=<secure-username>
+# Set: FLOWER_PASSWORD=<STRONG-32-char-random-password>
+# Set: WALLET_NAME=<your-validator-wallet>
+# Set: WALLET_HOTKEY=<your-hotkey>
+# Set: NETUID=<your-subnet-id>
+# Set: TOURNAMENT_SCHEDULE_MODE=daily
+# Set: TOURNAMENT_SUBMISSION_DURATION_SECONDS=86400        # 24 hours
+# Set: TOURNAMENT_EPOCH_COUNT=5
+# Set: TOURNAMENT_EPOCH_DURATION_SECONDS=86400             # 24 hours
+# Set: TOURNAMENT_NETWORKS=torus,bittensor,ethereum
+# Set: LOG_LEVEL=WARNING
 
-# Run migrations
-docker compose -f docker-compose.yml -f docker-compose.mainnet.yml run --rm migrations
+# Step 3: Build application Docker image
+docker compose -f ops/docker-compose.yml build
 
-# Monitor services
-docker compose -f docker-compose.yml -f docker-compose.mainnet.yml logs -f
+# Step 4: Start application services (AFTER node is synced!)
+docker compose -f ops/docker-compose.yml --env-file ops/.env.mainnet up -d
+
+# Step 5: Run migrations
+docker compose -f ops/docker-compose.yml --env-file ops/.env.mainnet run --rm migrations
+
+# Step 6: Monitor both separately
+docker compose -f ops/docker-compose.mainnet.yml logs -f mainnet-lite
+docker compose -f ops/docker-compose.yml logs -f
 ```
 
 **Mainnet Tournament Timing** (6-day cycle):
@@ -100,24 +158,36 @@ docker compose -f docker-compose.yml -f docker-compose.mainnet.yml logs -f
 - Total tournament time: 6 days
 - Daily automated tournaments (multiple concurrent)
 
-## Local Development with Subtensor
+**Subtensor Node** (runs separately):
+- File: `docker-compose.mainnet.yml`
+- Service: `mainnet-lite`
+- Endpoint: `ws://mainnet-lite:9944`
+- Sync time: 2-4 hours (must complete first!)
 
-For local development, start the local subtensor chain:
+## Local Development with Local Subtensor
+
+For local development with a local blockchain:
 
 ```bash
-# Start local subtensor chain
-docker compose -f docker-compose.localnet.yml up -d
+# Step 1: Start local subtensor chain (separate)
+docker compose -f ops/docker-compose.localnet.yml up -d
 
-# Configure validator to use local network
-# Set in .env: SUBTENSOR_NETWORK=local
+# Step 2: Configure .env to connect to local node
+nano ops/.env
+# Set: SUBTENSOR_NETWORK=ws://local-subtensor:9944
 
-# Then start the main infrastructure
-docker compose up -d
+# Step 3: Start application services
+docker compose -f ops/docker-compose.yml up -d
+
+# Step 4: Run migrations
+docker compose -f ops/docker-compose.yml run --rm migrations
 ```
 
-The local chain exposes:
-- WebSocket RPC: `ws://localhost:9944`
-- HTTP RPC: `http://localhost:9945`
+**Local Node Endpoints**:
+- From Docker network: `ws://local-subtensor:9944`
+- From host: `ws://localhost:9944`
+
+**Note**: See [`LOCAL_DEVELOPMENT.md`](LOCAL_DEVELOPMENT.md) for wallet setup and subnet creation.
 
 ## Build Only
 
@@ -129,6 +199,8 @@ docker compose build --no-cache infra-subnet-evaluation-worker
 
 ## Services
 
+### Application Services (Base Configuration)
+
 | Service | Port | Description |
 |---------|------|-------------|
 | infra-subnet-postgres | 5432 | Tournament state database |
@@ -138,6 +210,15 @@ docker compose build --no-cache infra-subnet-evaluation-worker
 | infra-subnet-evaluation-api | 8001 | Read-only REST API for webapp |
 | infra-subnet-validator | - | Bittensor validator neuron |
 | infra-subnet-flower | 5555 | Celery task monitoring UI |
+| migrations | - | Database migration runner (one-time) |
+
+### Subtensor Nodes (Network-Specific)
+
+| Service | Config File | Network | Endpoint |
+|---------|-------------|---------|----------|
+| local-subtensor | docker-compose.localnet.yml | Local development | ws://localhost:9944 |
+| testnet-lite | docker-compose.testnet.yml | Bittensor testnet | ws://testnet-lite:9944 |
+| mainnet-lite | docker-compose.mainnet.yml | Bittensor mainnet | ws://mainnet-lite:9944 |
 
 ## Volumes
 
@@ -146,6 +227,10 @@ docker compose build --no-cache infra-subnet-evaluation-worker
 | infra-subnet-postgres-data | /var/lib/postgresql/data | Database storage |
 | infra-subnet-repos | /data/repos | Cloned miner repositories |
 | infra-subnet-datasets | /data/datasets | Evaluation datasets |
+| testnet-lite-volume | /data | Testnet blockchain data |
+| mainnet-lite-volume | /data | Mainnet blockchain data |
+| subtensor-data | /data | Localnet blockchain data |
+| subtensor-keystore | /keystore | Localnet keystore |
 
 ## API Endpoints
 
@@ -198,7 +283,7 @@ The validator communicates with the Celery workers via Redis for task scheduling
 
 | Variable | Development | Testnet | Mainnet |
 |----------|-------------|---------|---------|
-| `SUBTENSOR_NETWORK` | finney/local | test | finney |
+| `SUBTENSOR_NETWORK` | finney/local | ws://testnet-lite:9944 | ws://mainnet-lite:9944 |
 | `TOURNAMENT_SCHEDULE_MODE` | manual | daily | daily |
 | `TOURNAMENT_SUBMISSION_DURATION_SECONDS` | 120 | 3600 | 86400 |
 | `TOURNAMENT_EPOCH_COUNT` | 3 | 3 | 5 |
@@ -227,28 +312,67 @@ Access Flower (Celery monitoring) at `http://localhost:5555`:
 
 ## Troubleshooting
 
-### Services won't start
+### Application services won't start
 ```bash
 # Check service status
-docker compose ps
+docker compose -f ops/docker-compose.yml ps
 
 # View detailed logs
-docker compose logs infra-subnet-postgres
-docker compose logs infra-subnet-evaluation-worker
+docker compose -f ops/docker-compose.yml logs infra-subnet-postgres
+docker compose -f ops/docker-compose.yml logs infra-subnet-evaluation-worker
+```
+
+### Subtensor node won't sync
+```bash
+# Check testnet node logs
+docker compose -f ops/docker-compose.testnet.yml logs testnet-lite
+
+# Check mainnet node logs
+docker compose -f ops/docker-compose.mainnet.yml logs mainnet-lite
+
+# Common issues:
+# - Port 30333 blocked by firewall
+# - Network connectivity to bootnodes
+# - Insufficient disk space
+# - Initial sync takes time (30-60 min testnet, 2-4 hours mainnet)
+```
+
+### Validator can't connect to subtensor
+```bash
+# Verify both services are on 'subnet' network
+docker network inspect subnet
+
+# Check subtensor node is healthy
+docker compose -f ops/docker-compose.testnet.yml ps
+# or
+docker compose -f ops/docker-compose.mainnet.yml ps
+
+# Check validator logs
+docker compose -f ops/docker-compose.yml logs infra-subnet-validator
+
+# Verify SUBTENSOR_NETWORK setting in .env
+grep SUBTENSOR_NETWORK ops/.env
 ```
 
 ### Reset everything
 ```bash
-# Stop all services
-docker compose down
+# Stop application services
+docker compose -f ops/docker-compose.yml down
 
-# Remove volumes (WARNING: deletes all data)
-docker compose down -v
+# Stop subtensor node
+docker compose -f ops/docker-compose.testnet.yml down
+# or
+docker compose -f ops/docker-compose.mainnet.yml down
+
+# Remove all volumes (WARNING: deletes all data including blockchain sync)
+docker compose -f ops/docker-compose.yml down -v
+docker compose -f ops/docker-compose.testnet.yml down -v
 
 # Rebuild and restart
-docker compose build --no-cache
-docker compose up -d
-docker compose run --rm migrations
+docker compose -f ops/docker-compose.yml build --no-cache
+docker compose -f ops/docker-compose.testnet.yml up -d  # Wait for sync!
+docker compose -f ops/docker-compose.yml up -d
+docker compose -f ops/docker-compose.yml run --rm migrations
 ```
 
 ### Database migrations fail
