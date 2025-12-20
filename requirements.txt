@@ -1,3 +1,6 @@
+# ChainSwarm Core
+chainswarm-core>=0.1.14
+
 # Existing
 starlette>=0.30.0
 pydantic>=2

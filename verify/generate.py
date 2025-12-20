@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import bittensor
 
@@ -10,12 +10,12 @@ def main(args):
     wallet = bittensor.wallet(name=args.name)
     keypair = wallet.coldkey
 
-    timestamp = datetime.now()
-    timezone = timestamp.astimezone().tzname()
+    timestamp = datetime.now(timezone.utc)
+    timezone_name = timestamp.astimezone().tzname()
 
     # ensure compatiblity with polkadotjs messages, as polkadotjs always wraps message
     message = (
-        "<Bytes>" + f"On {timestamp} {timezone} {args.message}" + "</Bytes>"
+        "<Bytes>" + f"On {timestamp} {timezone_name} {args.message}" + "</Bytes>"
     )
     signature = keypair.sign(data=message)
 

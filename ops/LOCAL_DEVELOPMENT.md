@@ -46,15 +46,15 @@ Create wallets using dev URIs (alice, bob, charlie, david, eve, steve):
 
 ```bash
 # Subnet owner wallet
-btcli wallet create --uri alice --wallet.name subnet --wallet.hotkey default
+btcli wallet create --uri alice --wallet.name subnet_local --wallet.hotkey default
 
 # Validator wallet
-btcli wallet create --uri bob --wallet.name validator --wallet.hotkey default
+btcli wallet create --uri bob --wallet.name validator_local --wallet.hotkey default
 
 # Miner wallets
-btcli wallet create --uri charlie --wallet.name miner1 --wallet.hotkey default
-btcli wallet create --uri dave --wallet.name miner2 --wallet.hotkey default
-btcli wallet create --uri eve --wallet.name miner3 --wallet.hotkey default
+btcli wallet create --uri charlie --wallet.name miner1_local --wallet.hotkey default
+btcli wallet create --uri dave --wallet.name miner2_local --wallet.hotkey default
+btcli wallet create --uri eve --wallet.name miner3_local --wallet.hotkey default
 ```
 
 **Note:** These URIs are pre-funded development accounts. Each has a balance for testing.
@@ -82,7 +82,7 @@ Activate the subnet (netuid 2 is typically the first user-created subnet):
 
 ```bash
 btcli subnet start --netuid 2 \
-  --wallet.name subnet \
+  --wallet.name subnet_local \
   --network ws://127.0.0.1:9995
 ```
 
@@ -93,23 +93,23 @@ Register the validator and miners on the subnet:
 ```bash
 # Register validator
 btcli subnets register --netuid 2 \
-  --wallet-name validator \
+  --wallet-name validator_local \
   --hotkey default \
   --network ws://127.0.0.1:9995
 
 # Register miners
 btcli subnets register --netuid 2 \
-  --wallet-name miner1 \
+  --wallet-name miner1_local \
   --hotkey default \
   --network ws://127.0.0.1:9995
 
 btcli subnets register --netuid 2 \
-  --wallet-name miner2 \
+  --wallet-name miner2_local \
   --hotkey default \
   --network ws://127.0.0.1:9995
 
 btcli subnets register --netuid 2 \
-  --wallet-name miner3 \
+  --wallet-name miner3_local \
   --hotkey default \
   --network ws://127.0.0.1:9995
 ```
@@ -121,7 +121,7 @@ Start each miner on a different port:
 ```bash
 # Terminal 1 - Miner 1
 python neurons/miner.py \
-  --wallet.name miner1 \
+  --wallet.name miner1_local \
   --wallet.hotkey default \
   --subtensor.network ws://127.0.0.1:9995 \
   --axon.port 8901 \
@@ -129,7 +129,7 @@ python neurons/miner.py \
 
 # Terminal 2 - Miner 2
 python neurons/miner.py \
-  --wallet.name miner2 \
+  --wallet.name miner2_local \
   --wallet.hotkey default \
   --subtensor.network ws://127.0.0.1:9995 \
   --axon.port 8902 \
@@ -137,7 +137,7 @@ python neurons/miner.py \
 
 # Terminal 3 - Miner 3
 python neurons/miner.py \
-  --wallet.name miner3 \
+  --wallet.name miner3_local \
   --wallet.hotkey default \
   --subtensor.network ws://127.0.0.1:9995 \
   --axon.port 8903 \
@@ -150,7 +150,7 @@ To participate in evaluation tournaments, add submission parameters:
 
 ```bash
 python neurons/miner.py \
-  --wallet.name miner1 \
+  --wallet.name miner1_local \
   --wallet.hotkey default \
   --subtensor.network ws://127.0.0.1:9995 \
   --axon.port 8901 \
@@ -165,7 +165,7 @@ Start the validator:
 
 ```bash
 python neurons/validator.py \
-  --wallet.name validator \
+  --wallet.name validator_local \
   --wallet.hotkey default \
   --subtensor.network ws://127.0.0.1:9995 \
   --netuid 2
@@ -185,7 +185,7 @@ Add stake to the validator to increase its influence:
 
 ```bash
 btcli stake add --netuid 2 \
-  --wallet-name validator \
+  --wallet-name validator_local \
   --hotkey default \
   --partial \
   --network ws://127.0.0.1:9995
@@ -194,7 +194,8 @@ btcli stake add --netuid 2 \
 Check validator overview:
 
 ```bash
-btcli wallet overview --wallet.name validator --network ws://127.0.0.1:9995
+btcli wallet overview --wallet.name validator_local
+ --network ws://127.0.0.1:9995
 ```
 
 ---
