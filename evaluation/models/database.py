@@ -37,6 +37,7 @@ class AnalyticsTournament(Base):
     # Timing
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    weights_set_at = Column(DateTime(timezone=True), nullable=True)
     
     # Metrics
     total_submissions = Column(Integer, nullable=False, server_default="0")

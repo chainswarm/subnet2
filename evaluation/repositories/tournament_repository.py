@@ -217,3 +217,24 @@ class TournamentRepository:
         ).delete()
         self.session.commit()
         return count
+
+    def get_submission_by_tournament_and_uid(self, tournament_id: UUID, uid: int) -> Optional[AnalyticsTournamentSubmission]:
+        """Get submission for specific tournament and miner UID."""
+        return self.session.query(AnalyticsTournamentSubmission).filter(
+            AnalyticsTournamentSubmission.tournament_id == tournament_id,
+            AnalyticsTournamentSubmission.uid == uid,
+        ).first()
+
+    def get_completed_tournament_awaiting_weights(self) -> Optional[AnalyticsTournament]:
+        """Get the oldest completed tournament without weights set."""
+        return self.session.query(AnalyticsTournament).filter(
+            AnalyticsTournament.status == "completed",
+            AnalyticsTournament.weights_set_at.is_(None),
+        ).order_by(AnalyticsTournament.started_at).first()
+
+    def mark_weights_set(self, tournament_id: UUID):
+        """Mark tournament as having weights set."""
+        tournament = self.get_by_id(tournament_id)
+        tournament.weights_set_at = datetime.utcnow()
+        self.session.commit()
+        logger.info("tournament_weights_set", tournament_id=str(tournament_id))

@@ -72,7 +72,12 @@ def add_args(cls, parser):
     Adds relevant arguments to the parser for operation.
     """
 
-    parser.add_argument("--netuid", type=int, help="Subnet netuid", default=1)
+    parser.add_argument(
+        "--netuid",
+        type=int,
+        help="Subnet netuid",
+        default=int(os.getenv("NETUID", "1"))
+    )
 
     parser.add_argument(
         "--neuron.device",

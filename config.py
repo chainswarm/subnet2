@@ -22,9 +22,6 @@ class Settings(BaseSettings):
     evaluation_memory_limit_mb: int = 8192
     evaluation_cpu_limit: float = 2.0
 
-    wallet_name: str = "default"
-    wallet_hotkey: str = "default"
-    subtensor_network: str = "finney"
     submission_timeout_seconds: int = 30
 
     # Tournament Timing Configuration

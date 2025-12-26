@@ -1,15 +1,12 @@
 from typing import List, Dict, Tuple
 from uuid import UUID
 
-import bittensor as bt
-import torch
 from loguru import logger
 
 from evaluation.db import get_session
 from evaluation.models.database import AnalyticsTournamentResult
 from evaluation.repositories.tournament_repository import TournamentRepository
 from evaluation.tasks.celery_app import celery_app
-from config import config
 
 
 def calculate_final_rankings(
@@ -149,42 +146,15 @@ def calculate_final_rankings(
     return rankings
 
 
-def set_weights_on_chain(
-    netuid: int,
-    rankings: List[tuple],
-) -> bool:
-    wallet = bt.wallet(name=config.wallet_name, hotkey=config.wallet_hotkey)
-    subtensor = bt.subtensor(network=config.subtensor_network)
-    metagraph = subtensor.metagraph(netuid=netuid)
-
-    weights = torch.zeros(metagraph.n.item())
-    for hotkey, uid, rank, weight, score in rankings:
-        if uid < len(weights):
-            weights[uid] = weight
-
-    uids = torch.arange(metagraph.n.item())
-
-    result = subtensor.set_weights(
-        wallet=wallet,
-        netuid=netuid,
-        uids=uids,
-        weights=weights,
-        wait_for_inclusion=True,
-        wait_for_finalization=False,
-    )
-
-    logger.info("weights_set", netuid=netuid, success=result)
-    return result
-
-
-@celery_app.task(name="evaluation.epoch_end")
 def epoch_end_task(tournament_id: str) -> dict:
     """
-    Calculate final rankings and set weights on-chain.
+    Calculate final rankings and prepare results for validator weight-setting.
     
     Implements STRICT disqualification:
     - ANY failed/timeout run → submission excluded
     - Only fully-successful submissions ranked
+    
+    The validator will poll the DB and set weights when it detects completed status.
     
     Args:
         tournament_id: UUID of the tournament
@@ -234,12 +204,7 @@ def epoch_end_task(tournament_id: str) -> dict:
             )
             repo.create_result(result)
 
-        # Set weights on chain
-        # TODO: Get netuid from config
-        netuid = 1
-        weights_success = set_weights_on_chain(netuid, rankings)
-
-        # Mark tournament complete
+        # Mark tournament complete (validator will set weights)
         repo.update_status(tournament.id, "completed")
 
         logger.info(
@@ -247,7 +212,7 @@ def epoch_end_task(tournament_id: str) -> dict:
             tournament_id=tournament_id,
             epoch_number=tournament.epoch_number,
             participants=len(rankings),
-            weights_set=weights_success,
+            weights_set=False,  # Validator will poll and set
             winner=winner_hotkey,
         )
 
@@ -255,7 +220,7 @@ def epoch_end_task(tournament_id: str) -> dict:
             "success": True,
             "epoch_number": tournament.epoch_number,
             "participants": len(rankings),
-            "weights_set": weights_success,
+            "weights_set": False,  # Validator will poll and set
             "winner": winner_hotkey,
         }
 

@@ -344,6 +344,179 @@ See [`docs/architecture/EVALUATION_SCORING_MODEL.md`](docs/architecture/EVALUATI
      --subtensor.network finney
    ```
 
+---
+
+#### Configuration Architecture
+
+The subnet uses two configuration systems that work together:
+
+| Setting Type | Source | Used By | Examples |
+|--------------|--------|---------|----------|
+| **Infrastructure** | Environment (`.env`) | Celery workers, API | `POSTGRES_*`, `REDIS_URL`, `TOURNAMENT_*` |
+| **Bittensor** | CLI args **or** Environment | Validator neuron, Celery tasks | `--netuid`, `--wallet.name`, `NETUID`, `WALLET_NAME` |
+
+**Key Principle**: Bittensor settings can come from either CLI arguments (when running validator directly) or environment variables (when running in Docker/Celery).
+
+**Files**:
+- [`config.py`](config.py) - Pydantic settings for infrastructure (DB, Redis, paths, tournament timing)
+- [`template/utils/config.py`](template/utils/config.py) - Bittensor argparse with environment fallbacks
+- [`evaluation/bittensor_config.py`](evaluation/bittensor_config.py) - Factory for Celery tasks to create Bittensor objects from environment
+
+---
+
+#### Local Development Setup (Developer)
+
+For development with faster iteration, run the validator outside Docker while using Docker for infrastructure only.
+
+**1. Start infrastructure services**:
+```bash
+cd ops
+docker compose up -d infra-subnet-postgres infra-subnet-redis
+```
+
+**2. Set environment variables** (or copy to shell profile):
+```bash
+export POSTGRES_HOST=localhost
+export POSTGRES_PORT=5432
+export POSTGRES_DB=subnet2
+export POSTGRES_USER=subnet2
+export POSTGRES_PASSWORD=your_password
+export REDIS_URL=redis://localhost:6379/0
+export NETUID=2
+export WALLET_NAME=validator
+export WALLET_HOTKEY=default
+export SUBTENSOR_NETWORK=finney
+```
+
+**3. Run database migrations**:
+```bash
+alembic upgrade head
+```
+
+**4. Start the validator** (CLI arguments override env vars):
+```bash
+python neurons/validator.py \
+  --netuid 2 \
+  --wallet.name validator \
+  --wallet.hotkey default \
+  --subtensor.network finney
+```
+
+**5. Start Celery worker** (uses environment variables):
+```bash
+celery -A evaluation.tasks.celery_app worker -l info --concurrency=2
+```
+
+**6. (Optional) Start Celery beat** for automatic scheduling:
+```bash
+celery -A evaluation.tasks.celery_app beat -l info
+```
+
+**7. (Optional) Start the API**:
+```bash
+uvicorn evaluation.api.main:app --host 0.0.0.0 --port 8001
+```
+
+---
+
+#### Production Deployment (DevOps)
+
+For production, all services run in Docker Compose.
+
+**1. Clone and configure**:
+```bash
+git clone https://github.com/chainswarm/subnet
+cd subnet/ops
+cp .env.example .env
+```
+
+**2. Edit environment file** for your deployment:
+```bash
+nano .env
+```
+
+**Required settings** for production:
+```bash
+# Database (use strong passwords!)
+POSTGRES_PASSWORD=<32+ character random password>
+
+# Bittensor
+WALLET_NAME=validator
+WALLET_HOTKEY=default
+NETUID=<your subnet netuid>
+SUBTENSOR_NETWORK=finney  # or ws://mainnet-lite:9944 for local node
+BITTENSOR_VOLUME_PATH=/path/to/your/.bittensor
+
+# Tournament (production timing)
+TOURNAMENT_SCHEDULE_MODE=daily
+TOURNAMENT_SUBMISSION_DURATION_SECONDS=86400     # 24 hours
+TOURNAMENT_EPOCH_COUNT=5
+TOURNAMENT_EPOCH_DURATION_SECONDS=86400          # 24 hours per epoch
+TOURNAMENT_NETWORKS=torus,bittensor,ethereum
+
+# Monitoring
+FLOWER_USER=admin
+FLOWER_PASSWORD=<32+ character random password>
+```
+
+**3. Build the Docker image**:
+```bash
+docker compose build
+```
+
+**4. Start all services**:
+```bash
+docker compose up -d
+```
+
+**5. Run database migrations**:
+```bash
+docker compose run --rm migrations
+```
+
+**6. Verify services are running**:
+```bash
+docker compose ps
+docker compose logs -f infra-subnet-validator
+```
+
+**Monitoring endpoints**:
+- Evaluation API: `http://localhost:8001/docs`
+- Flower (Celery): `http://localhost:5555`
+
+---
+
+#### Environment Variables Reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| **Database** | | |
+| `POSTGRES_HOST` | `localhost` | PostgreSQL host |
+| `POSTGRES_PORT` | `5432` | PostgreSQL port |
+| `POSTGRES_DB` | `subnet2` | Database name |
+| `POSTGRES_USER` | `subnet2` | Database user |
+| `POSTGRES_PASSWORD` | *required* | Database password |
+| **Redis** | | |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL |
+| **Bittensor** | | |
+| `WALLET_NAME` | `default` | Wallet name (or use `--wallet.name`) |
+| `WALLET_HOTKEY` | `default` | Hotkey name (or use `--wallet.hotkey`) |
+| `NETUID` | `1` | Subnet netuid (or use `--netuid`) |
+| `SUBTENSOR_NETWORK` | `finney` | Network (or use `--subtensor.network`) |
+| `BITTENSOR_VOLUME_PATH` | `~/.bittensor` | Path to wallet directory |
+| **Tournament** | | |
+| `TOURNAMENT_SCHEDULE_MODE` | `manual` | `manual` or `daily` |
+| `TOURNAMENT_SUBMISSION_DURATION_SECONDS` | `120` | Submission phase duration |
+| `TOURNAMENT_EPOCH_COUNT` | `3` | Number of evaluation epochs |
+| `TOURNAMENT_EPOCH_DURATION_SECONDS` | `180` | Duration per epoch |
+| `TOURNAMENT_NETWORKS` | `torus` | Comma-separated network names |
+| **Evaluation** | | |
+| `BENCHMARK_MAX_EXECUTION_TIME` | `3600` | Max container runtime (seconds) |
+| `BENCHMARK_MEMORY_LIMIT` | `16g` | Container memory limit |
+| `BENCHMARK_CPU_LIMIT` | `2` | Container CPU limit |
+
+---
+
 #### Validator Operations
 
 **Development Mode** - Manual tournament triggering:

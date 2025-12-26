@@ -1,8 +1,8 @@
-"""Initial migration with all tables
+"""Complete initial migration with all tables including weights_set_at
 
-Revision ID: 001_initial_migration
+Revision ID: 001_complete_initial_migration
 Revises: 
-Create Date: 2025-12-15 14:30:00.000000
+Create Date: 2025-12-26 22:10:00.000000
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '001_initial_migration'
+revision: str = '001_complete_initial_migration'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -37,6 +37,7 @@ def upgrade() -> None:
         sa.Column('test_networks', postgresql.ARRAY(sa.String()), server_default='{}', nullable=False),
         sa.Column('baseline_repository', sa.String(500), nullable=True),
         sa.Column('baseline_version', sa.String(50), nullable=True),
+        sa.Column('weights_set_at', sa.DateTime(timezone=True), nullable=True),  # NEW: Weight tracking
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('epoch_number'),
@@ -62,6 +63,7 @@ def upgrade() -> None:
         sa.Column('uid', sa.Integer(), nullable=False),
         sa.Column('docker_image_digest', sa.String(128), nullable=False),
         sa.Column('repository_url', sa.String(500), nullable=True),
+        sa.Column('commit_hash', sa.String(40), nullable=True),  # Added commit_hash field
         sa.Column('status', sa.String(50), server_default='pending', nullable=False),
         sa.Column('validation_error', sa.Text(), nullable=True),
         sa.Column('submitted_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
