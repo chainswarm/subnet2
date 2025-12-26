@@ -120,9 +120,9 @@ class Validator(BaseValidatorNeuron):
             session.close()
 
 
-# The main function parses the configuration and runs the validator.
 if __name__ == "__main__":
     with Validator() as validator:
+        bt.logging.info(f"Starting the Validator")
         while True:
             bt.logging.info(f"Validator running... {time.time()}")
             time.sleep(5)

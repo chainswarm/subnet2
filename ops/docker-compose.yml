@@ -360,10 +360,11 @@ services:
     pull_policy: never
     command: >
       python neurons/validator.py
-      --netuid ${NETUID:-2}
+      --netuid ${NETUID:-305}
       --wallet.name ${WALLET_NAME:-validator}
       --wallet.hotkey ${WALLET_HOTKEY:-default}
-      --subtensor.network ${SUBTENSOR_NETWORK:-finney}
+      --subtensor.network ${SUBTENSOR_NETWORK:-test}
+      --logging.trace DEBUG
     environment:
       # Database Connection
       - POSTGRES_HOST=infra-subnet-postgres
