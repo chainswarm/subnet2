@@ -18,73 +18,140 @@
 # DEALINGS IN THE SOFTWARE.
 
 import typing
+import re
 import bittensor as bt
 
-# TODO(developer): Rewrite with your protocol definition.
-
-# This is the protocol for the dummy miner and validator.
-# It is a simple request-response protocol where the validator sends a request
-# to the miner, and the miner responds with a dummy response.
-
-# ---- miner ----
-# Example usage:
-#   def dummy( synapse: Dummy ) -> Dummy:
-#       synapse.dummy_output = synapse.dummy_input + 1
-#       return synapse
-#   axon = bt.axon().attach( dummy ).serve(netuid=...).start()
-
-# ---- validator ---
-# Example usage:
-#   dendrite = bt.dendrite()
-#   dummy_output = dendrite.query( Dummy( dummy_input = 1 ) )
-#   assert dummy_output == 2
-
-
-class Dummy(bt.Synapse):
-    """
-    A simple dummy protocol representation which uses bt.Synapse as its base.
-    This protocol helps in handling dummy request and response communication between
-    the miner and the validator.
-
-    Attributes:
-    - dummy_input: An integer value representing the input request sent by the validator.
-    - dummy_output: An optional integer value which, when filled, represents the response from the miner.
-    """
-
-    # Required request input, filled by sending dendrite caller.
-    dummy_input: int
-
-    # Optional request output, filled by receiving axon.
-    dummy_output: typing.Optional[int] = None
-
-    def deserialize(self) -> int:
-        """
-        Deserialize the dummy output. This method retrieves the response from
-        the miner in the form of dummy_output, deserializes it and returns it
-        as the output of the dendrite.query() call.
-
-        Returns:
-        - int: The deserialized response, which in this case is the value of dummy_output.
-
-        Example:
-        Assuming a Dummy instance has a dummy_output value of 5:
-        >>> dummy_instance = Dummy(dummy_input=4)
-        >>> dummy_instance.dummy_output = 5
-        >>> dummy_instance.deserialize()
-        5
-        """
-        return self.dummy_output
-
-
 class SubmissionSynapse(bt.Synapse):
+    """
+    Synapse for miner tournament submissions.
+    
+    Validators use this to query miners for their code repository information.
+    Miners respond with their repository URL and commit hash, which validators
+    then use to clone, build, and evaluate the miner's analyzer.
+    
+    Attributes:
+        tournament_id: UUID of the tournament
+        epoch_number: Current epoch number
+        repository_url: GitHub repository URL (HTTPS format)
+        commit_hash: Git commit SHA or branch name
+    """
     tournament_id: str
     epoch_number: int
 
     repository_url: typing.Optional[str] = None
     commit_hash: typing.Optional[str] = None
 
-    def deserialize(self) -> dict:
-        return {
-            "repository_url": self.repository_url,
-            "commit_hash": self.commit_hash,
-        }
+    def deserialize(self) -> "SubmissionSynapse":
+        """
+        Return self for strong typing in validator.
+        
+        This provides better type hints and allows validators to access
+        all synapse metadata (dendrite info, timing, etc.) rather than
+        just the submission data fields.
+        
+        Returns:
+            Self (SubmissionSynapse object)
+        """
+        return self
+
+    @staticmethod
+    def validate_submission_data(
+        repository_url: typing.Optional[str],
+        commit_hash: typing.Optional[str]
+    ) -> typing.Tuple[bool, typing.Optional[str]]:
+        """
+        Validate submission data fields (format validation only).
+        
+        This performs format validation to fail fast on invalid input.
+        Repository existence is validated later during git clone operation.
+        
+        Validation rules:
+        - Both fields must be non-empty strings
+        - repository_url must be a valid GitHub HTTPS URL
+        - commit_hash can be either a Git SHA (7-40 hex chars) or branch name
+        
+        Args:
+            repository_url: GitHub repository URL to validate
+            commit_hash: Git commit SHA or branch name to validate
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+            - (True, None) if valid
+            - (False, error_message) if invalid
+        
+        Examples:
+            >>> SubmissionSynapse.validate_submission_data(
+            ...     "https://github.com/user/repo",
+            ...     "abc123def"
+            ... )
+            (True, None)
+            
+            >>> SubmissionSynapse.validate_submission_data(
+            ...     "https://github.com/user/repo",
+            ...     "main"
+            ... )
+            (True, None)
+            
+            >>> SubmissionSynapse.validate_submission_data(
+            ...     "git@github.com:user/repo.git",
+            ...     "abc123"
+            ... )
+            (False, "repository_url must be a GitHub HTTPS URL (https://github.com/owner/repo)")
+        """
+        # 1. Check existence
+        if not repository_url or not commit_hash:
+            return False, "Missing repository_url or commit_hash"
+        
+        # 2. Validate types
+        if not isinstance(repository_url, str):
+            return False, "repository_url must be a string"
+        
+        if not isinstance(commit_hash, str):
+            return False, "commit_hash must be a string"
+        
+        # 3. Validate GitHub HTTPS URL format
+        repository_url = repository_url.strip()
+        
+        # GitHub HTTPS pattern: https://github.com/owner/repo (with optional .git)
+        github_https_pattern = r'^https://github\.com/[\w-]+/[\w.-]+(?:\.git)?$'
+        
+        if not re.match(github_https_pattern, repository_url):
+            return False, "repository_url must be a GitHub HTTPS URL (https://github.com/owner/repo)"
+        
+        # 4. Validate commit hash format
+        # Allow both Git SHA (7-40 hex chars) and branch names
+        commit_hash = commit_hash.strip()
+        
+        # Git SHA pattern: 7-40 hexadecimal characters
+        is_sha = re.match(r'^[0-9a-fA-F]{7,40}$', commit_hash)
+        
+        # Branch name pattern: alphanumeric, hyphens, underscores, slashes (max 255 chars)
+        # Common examples: main, develop, feature/new-algo, release/v1.0
+        is_branch = re.match(r'^[\w\-./]{1,255}$', commit_hash)
+        
+        if not (is_sha or is_branch):
+            return False, "commit_hash must be a valid Git SHA (7-40 hex chars) or branch name"
+        
+        return True, None
+
+    def is_valid_submission(self) -> typing.Tuple[bool, typing.Optional[str]]:
+        """
+        Validate this synapse's submission data.
+        
+        Convenience instance method that validates the synapse's own
+        repository_url and commit_hash fields.
+        
+        Returns:
+            Tuple of (is_valid, error_message)
+        
+        Example:
+            >>> synapse = SubmissionSynapse(
+            ...     tournament_id="abc",
+            ...     epoch_number=1,
+            ...     repository_url="https://github.com/user/repo",
+            ...     commit_hash="main"
+            ... )
+            >>> synapse.is_valid_submission()
+            (True, None)
+        """
+        return self.validate_submission_data(self.repository_url, self.commit_hash)

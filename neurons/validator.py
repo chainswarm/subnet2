@@ -4,6 +4,7 @@
 
 import asyncio
 import time
+import typing
 import uuid
 from datetime import datetime, timezone
 from typing import List
@@ -38,6 +39,41 @@ class Validator(BaseValidatorNeuron):
     def __init__(self, config=None):
         super(Validator, self).__init__(config=config)
         bt.logging.info("Analytics Tournament Validator initialized - state machine mode")
+
+    def get_valid_axons(self) -> typing.Tuple[List, List[int]]:
+        """
+        Filter out placeholder/invalid axons to avoid connection errors.
+        
+        Miners with 0.0.0.0:0 are registered on-chain but have no running axon.
+        Querying them causes ClientConnectorError timeouts.
+        
+        Returns:
+            Tuple of (valid_axons_list, corresponding_uids_list)
+        """
+        valid_axons = []
+        valid_uids = []
+        inactive_count = 0
+        
+        for uid, axon in enumerate(self.metagraph.axons):
+            # Skip placeholder axons (0.0.0.0 or port 0)
+            if axon.ip == "0.0.0.0" or axon.port == 0:
+                bt.logging.trace(
+                    f"Skipping UID {uid} (hotkey={self.metagraph.hotkeys[uid][:8]}...) "
+                    f"with invalid axon: {axon.ip}:{axon.port}"
+                )
+                inactive_count += 1
+                continue
+            
+            valid_axons.append(axon)
+            valid_uids.append(uid)
+        
+        bt.logging.info(
+            f"Axon filtering: {len(valid_axons)} active / "
+            f"{inactive_count} inactive / "
+            f"{len(self.metagraph.axons)} total miners"
+        )
+        
+        return valid_axons, valid_uids
 
     def get_tournament_state(self) -> str:
         """Derive tournament state from existing DB tables (no extra state storage)."""
@@ -99,14 +135,22 @@ class Validator(BaseValidatorNeuron):
                 tournament = repo.create_tournament(tournament)
                 bt.logging.info(f"Created tournament {tournament.id} for epoch {tournament.epoch_number}")
 
-            # Query all miners via dendrite
+            # Query only active miners (filter out 0.0.0.0:0 placeholders)
+            valid_axons, valid_uids = self.get_valid_axons()
+            
+            if not valid_axons:
+                bt.logging.warning("No active miners found to query for submissions")
+                return
+            
             synapse = SubmissionSynapse(
                 tournament_id=str(tournament.id),
                 epoch_number=tournament.epoch_number,
             )
 
+            bt.logging.info(f"Querying {len(valid_axons)} active miners for submissions...")
+            
             responses = await self.dendrite(
-                axons=self.metagraph.axons,
+                axons=valid_axons,  # Use filtered axons instead of all
                 synapse=synapse,
                 timeout=config.submission_timeout_seconds,
                 deserialize=False,  # Keep synapse objects, don't deserialize
@@ -114,24 +158,40 @@ class Validator(BaseValidatorNeuron):
 
             # Upsert submissions (only if changed)
             submission_count = 0
-            for uid, response in enumerate(responses):
+            invalid_count = 0
+            empty_count = 0
+            
+            for response, uid in zip(responses, valid_uids):  # Map responses to original UIDs
                 # Validate response is a SubmissionSynapse object
                 if not isinstance(response, SubmissionSynapse):
-                    bt.logging.warning(f"Invalid response type from UID {uid}: {type(response)}")
+                    bt.logging.warning(
+                        f"UID {uid} (hotkey={self.metagraph.hotkeys[uid][:8]}...) "
+                        f"returned invalid response type: {type(response)}"
+                    )
+                    invalid_count += 1
                     continue
                 
-                # Check if response has valid data
-                if not hasattr(response, 'repository_url') or not hasattr(response, 'commit_hash'):
-                    bt.logging.warning(f"Response from UID {uid} missing required attributes")
+                # Validate submission data using synapse's built-in validation
+                is_valid, error_msg = response.is_valid_submission()
+                if not is_valid:
+                    if error_msg == "Missing repository_url or commit_hash":
+                        bt.logging.trace(f"UID {uid} did not provide submission (not configured)")
+                        empty_count += 1
+                    else:
+                        bt.logging.warning(
+                            f"UID {uid} (hotkey={self.metagraph.hotkeys[uid][:8]}...) "
+                            f"invalid submission: {error_msg}"
+                        )
+                        invalid_count += 1
                     continue
                 
                 repo_url = response.repository_url
                 commit = response.commit_hash
                 
-                # Skip empty/invalid submissions
-                if not repo_url or not commit:
-                    bt.logging.debug(f"UID {uid} did not provide submission")
-                    continue
+                bt.logging.debug(
+                    f"UID {uid} (hotkey={self.metagraph.hotkeys[uid][:8]}...) "
+                    f"submitted: {repo_url}@{commit[:8]}"
+                )
                 
                 # Check if submission exists
                 existing = repo.get_submission_by_tournament_and_uid(tournament.id, uid)
@@ -161,6 +221,15 @@ class Validator(BaseValidatorNeuron):
                     bt.logging.info(f"New submission from UID {uid}: {repo_url}@{commit}")
                 
                 submission_count += 1
+
+            # Log summary of collection round
+            bt.logging.info(
+                f"Submission collection complete: "
+                f"{submission_count} valid / "
+                f"{empty_count} not configured / "
+                f"{invalid_count} invalid / "
+                f"{len(valid_axons)} queried"
+            )
 
             # Check if submission window has closed
             elapsed = (datetime.now(timezone.utc) - tournament.started_at).total_seconds()
